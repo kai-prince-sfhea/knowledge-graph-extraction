@@ -1,0 +1,26 @@
+---
+title: Education example
+---
+
+## An educational action {#educational-action}
+
+An action in this educational example means a step taken to revise a course.
+That sense is distinct from the mathematical concept of a
+[group action](#def-group-action). This link is explicit author markup.
+This paragraph deliberately uses the ordinary word action without an automatic
+link or a mathematics identity assertion.
+
+The declared educational concept references the mathematical concept because
+this synthetic course-revision example discusses including that definition in
+a lesson. The relation expresses an editorial association, not a prerequisite
+for every educational action.
+
+## The same included definition
+
+{{< include _definition.qmd >}}
+
+The semantic group-action object has an occurrence on this page as well as on
+the [mathematics page](index.qmd#def-group-action). Its identity stays the same,
+while its two containing-document destinations differ.
+
+[Read the source-linked knowledge graph report](knowledge-graph/report.html).

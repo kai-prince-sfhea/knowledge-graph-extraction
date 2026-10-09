@@ -1,0 +1,28 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - index.qmd
+    - education.qmd
+
+website:
+  title: Synthetic Knowledge Graph Example
+  navbar:
+    left:
+      - href: index.qmd
+        text: Mathematics
+      - href: education.qmd
+        text: Education
+
+format:
+  html:
+    toc: true
+
+bibliography: references.bib
+
+filters:
+  - knowledge-graph-extraction
+
+knowledge-graph:
+  declarations: knowledge.yml
+  mode: update

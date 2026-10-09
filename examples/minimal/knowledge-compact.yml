@@ -1,0 +1,49 @@
+# Optional sources/review/canonical occurrences use the extension defaults.
+version: 0
+namespaces:
+  math: https://example.org/math/
+  he: https://example.org/he/
+objects:
+  - id: math:group-action
+    type: concept
+    scope: mathematics
+    labels: {en: action}
+    public: true
+    source: {path: index.qmd, anchor: def-group-action}
+    occurrences:
+      - {path: education.qmd, anchor: def-group-action}
+  - id: he:action
+    type: concept
+    scope: higher-education
+    labels: {en: action}
+    public: true
+    source: {path: education.qmd, anchor: educational-action}
+  - id: math:positive-square
+    type: assertion
+    scope: mathematics
+    labels: {en: Positive square of a nonzero real number}
+    public: true
+    source: {path: index.qmd, anchor: thm-positive-square}
+  - id: math:definition-of-group-action
+    type: assertion
+    scope: mathematics
+    labels: {en: Definition of group action}
+    public: true
+    source: {path: index.qmd, anchor: def-group-action}
+    occurrences:
+      - {path: education.qmd, anchor: def-group-action}
+relations:
+  - id: math:defines-group-action
+    type: defines
+    from: math:definition-of-group-action
+    to: math:group-action
+    scope: mathematics
+    public: true
+    source: {path: index.qmd, anchor: def-group-action}
+  - id: he:references-group-action
+    type: references
+    from: he:action
+    to: math:group-action
+    scope: higher-education
+    public: true
+    source: {path: education.qmd, anchor: educational-action}

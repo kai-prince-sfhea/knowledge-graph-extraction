@@ -1,0 +1,11 @@
+::: {#def-group-action}
+## Group action
+
+A *group action* of a group $G$ on a set $X$ is a map
+$G \times X \longrightarrow X$, written $(g,x) \mapsto g \cdot x$, such that
+$e \cdot x=x$ and $(gh) \cdot x=g \cdot(h \cdot x)$ for every
+$g,h \in G$ and $x \in X$.
+
+This definition is a shared include. Its containing-page anchor is observed
+separately on each rendered page.
+:::

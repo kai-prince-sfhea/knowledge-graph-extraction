@@ -1,0 +1,107 @@
+version: 0
+
+namespaces:
+  math: https://example.org/math/
+  he: https://example.org/he/
+
+sources:
+  - path: index.qmd
+  - path: education.qmd
+
+objects:
+  - id: math:group-action
+    type: concept
+    scope: mathematics
+    labels:
+      en: action
+    review: declared
+    public: true
+    source:
+      path: index.qmd
+      anchor: def-group-action
+    occurrences:
+      - path: index.qmd
+        anchor: def-group-action
+      - path: education.qmd
+        anchor: def-group-action
+
+  - id: he:action
+    type: concept
+    scope: higher-education
+    labels:
+      en: action
+    review: declared
+    public: true
+    source:
+      path: education.qmd
+      anchor: educational-action
+    occurrences:
+      - path: education.qmd
+        anchor: educational-action
+
+  - id: math:positive-square
+    type: assertion
+    scope: mathematics
+    labels:
+      en: Positive square of a nonzero real number
+    review: declared
+    public: true
+    source:
+      path: index.qmd
+      anchor: thm-positive-square
+    occurrences:
+      - path: index.qmd
+        anchor: thm-positive-square
+
+  - id: math:definition-of-group-action
+    type: assertion
+    scope: mathematics
+    labels:
+      en: Definition of group action
+    review: declared
+    public: true
+    source:
+      path: index.qmd
+      anchor: def-group-action
+    occurrences:
+      - path: index.qmd
+        anchor: def-group-action
+      - path: education.qmd
+        anchor: def-group-action
+
+  - id: he:restricted-fixture
+    type: concept
+    scope: higher-education
+    labels:
+      en: KG_PRIVATE_CANARY_7FA39C
+    review: declared
+    public: false
+    source:
+      path: education.qmd
+      anchor: educational-action
+    occurrences:
+      - path: education.qmd
+        anchor: educational-action
+
+relations:
+  - id: math:defines-group-action
+    type: defines
+    from: math:definition-of-group-action
+    to: math:group-action
+    scope: mathematics
+    review: declared
+    public: true
+    source:
+      path: index.qmd
+      anchor: def-group-action
+
+  - id: he:references-group-action
+    type: references
+    from: he:action
+    to: math:group-action
+    scope: higher-education
+    review: declared
+    public: true
+    source:
+      path: education.qmd
+      anchor: educational-action

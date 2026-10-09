@@ -1,0 +1,38 @@
+/* Copyright 2026 Kai Prince. SPDX-License-Identifier: Apache-2.0
+   See the accompanying LICENSE and COPYRIGHT files for terms and attribution. */
+:root { color-scheme: light dark; font: 1rem/1.55 system-ui,sans-serif; }
+body { margin: 0; }
+main { max-width: 80rem; margin: auto; padding: 1rem clamp(1rem,4vw,3rem) 3rem; }
+a { color: LinkText; text-underline-offset: .16em; }
+h1,h2,h3 { line-height: 1.2; }
+section { margin-block: 2rem; }
+code { overflow-wrap: anywhere; }
+button,input,select { font: inherit; }
+button { padding: .45rem .8rem; cursor: pointer; }
+label { display: inline-flex; flex-direction: column; gap: .2rem; }
+label:has(input[type=checkbox]) { flex-direction: row; align-items: center; }
+form,.kg-controls { display: flex; flex-wrap: wrap; align-items: end; gap: .6rem; margin-block: .7rem; }
+input,select { max-width: 100%; min-height: 2.6rem; padding-inline: .5rem; }
+select { max-width: 26rem; }
+input[type=checkbox] { min-height: auto; }
+button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible { outline: 3px solid Highlight; outline-offset: 3px; }
+.kg-skip { position: absolute; top: -5rem; left: 1rem; padding: .5rem; background: Canvas; }
+.kg-skip:focus { top: .5rem; }
+.kg-surface { border: 1px solid GrayText; border-radius: .3rem; background: Canvas; }
+.kg-surface svg { display: block; width: 100%; max-height: 36rem; touch-action: none; cursor: grab; }
+.kg-surface svg.kg-dragging { cursor: grabbing; }
+.kg-edge { stroke: GrayText; stroke-width: 1.5; }
+.kg-edge.kg-route-edge { stroke: Highlight; stroke-width: 4; }
+.kg-node { cursor: pointer; }
+.kg-node circle { fill: Canvas; stroke: CanvasText; stroke-width: 2; }
+.kg-node.kg-selected circle { fill: Highlight; stroke: Highlight; }
+.kg-node text { fill: CanvasText; text-anchor: middle; font-size: 14px; pointer-events: none; }
+.kg-node.kg-selected text { font-weight: bold; }
+[data-results] { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,22rem),1fr)); gap: .7rem 1.2rem; padding-left: 1.2rem; }
+[data-results] li { overflow-wrap: anywhere; }
+[data-results] button[aria-pressed=true] { outline: 2px solid Highlight; }
+.kg-note { border-left: .25rem solid GrayText; padding-left: .8rem; }
+.kg-warning { border-left-color: Highlight; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto !important; } }
+@media (forced-colors: active) { .kg-edge { stroke: CanvasText; } .kg-node.kg-selected circle { fill: Canvas; stroke: Highlight; stroke-width: 5; } }

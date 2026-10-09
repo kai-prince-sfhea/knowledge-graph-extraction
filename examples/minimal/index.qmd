@@ -1,0 +1,42 @@
+---
+title: Mathematics example
+---
+
+This small website uses synthetic material to demonstrate explicit declarations,
+native Quarto anchors, a reused include and ordinary citations. The declaration
+file assigns stable semantic identities; repeated words do not create links.
+
+## A shared definition
+
+{{< include _definition.qmd >}}
+
+## A separate theorem
+
+::: {#thm-positive-square}
+## Positive square
+
+For any nonzero real number $x$, the square $x^2$ is positive.
+:::
+
+::: {#prf-positive-square .proof for="thm-positive-square" data-kg-proves="math:positive-square"}
+For a nonzero real number, either $x>0$ or $-x>0$. The product of two positive
+real numbers is positive. In either case, $x^2>0$.
+:::
+
+@thm-positive-square and @def-group-action remain native Quarto cross-references.
+The theorem does not depend on the group-action definition. The proof's explicit
+association is an authored attribute, not a claim that a proof checker ran.
+
+The reference [@synthetic2026] is fictional and exists only to check that the
+filter preserves citation processing.
+
+## Inspect the declarations
+
+[Read the source-linked knowledge graph report](knowledge-graph/report.html).
+The report is produced after rendering; this incoming link does not add it to
+Quarto's search index during the same render pass.
+
+## References
+
+::: {#refs}
+:::
