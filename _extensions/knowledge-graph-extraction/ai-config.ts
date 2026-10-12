@@ -1,7 +1,7 @@
 // Preferred models for the optional authoring-time assistance workstream.
 // This module selects/validates policy; it does not download or run a model.
 export const AI_DEFAULTS = Object.freeze({
-  embedding: Object.freeze({ model: "google/embeddinggemma-300m", dimensions: 768 }),
+  embedding: Object.freeze({ model: "google/embeddinggemma-2", dimensions: 768 }),
   generation: Object.freeze({ model: "google/gemma-4-E2B" }),
   extraction: Object.freeze({ model: "fastino/gliner2.5-multi-v1", enabled: false }),
 });

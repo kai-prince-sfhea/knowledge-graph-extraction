@@ -220,7 +220,7 @@ export async function acceptSuggestions(sidecar:Data,input:{ids:string[];reviewe
 }
 
 function embeddingProvenance(value:unknown):Data{
-  const input=map(value,"embedding provenance");fields(input,["model","dimensions","artifactSha256","revision","licence","runtime","queryPrefix","documentPrefix"],"embedding provenance");
+  const input=map(value,"embedding provenance");fields(input,["model","dimensions","artifactSha256","revision","licence","runtime","queryPrefix","documentPrefix","encodingProfile","maxTokens"],"embedding provenance");
   const dimensions=integer(input.dimensions,1,768,"embedding dimensions");
   if(![128,256,512,768].includes(dimensions))fail("EmbeddingGemma dimensions must be 128, 256, 512 or 768");
   const runtime=map(input.runtime,"embedding runtime");fields(runtime,["name","version","sha256","licence","dependencies"],"embedding runtime");
@@ -228,12 +228,15 @@ function embeddingProvenance(value:unknown):Data{
     const item=map(raw,`embedding dependency '${name}'`);fields(item,["version","sha256","licence"],`embedding dependency '${name}'`);
     dependencies[name]={version:text(item.version,"dependency.version"),sha256:hash(item.sha256,"dependency.sha256"),licence:text(item.licence,"dependency.licence")};
   }
-  return {model:text(input.model??AI_DEFAULTS.embedding.model,"embedding model"),dimensions,artifactSha256:hash(input.artifactSha256,"embedding artifactSha256"),
+  // Existing vectors must name their encoder; a changed default must never relabel old data.
+  return {model:text(input.model,"embedding model"),dimensions,artifactSha256:hash(input.artifactSha256,"embedding artifactSha256"),
     revision:text(input.revision,"embedding revision"),licence:text(input.licence,"embedding licence"),runtime:{name:text(runtime.name,"embedding runtime.name"),
       version:text(runtime.version,"embedding runtime.version"),sha256:hash(runtime.sha256,"embedding runtime.sha256"),licence:text(runtime.licence,"embedding runtime.licence"),
       ...(runtime.dependencies===undefined?{}:{dependencies})},
     ...(input.queryPrefix===undefined?{}:{queryPrefix:text(input.queryPrefix,"embedding queryPrefix")}),
-    ...(input.documentPrefix===undefined?{}:{documentPrefix:text(input.documentPrefix,"embedding documentPrefix")})};
+    ...(input.documentPrefix===undefined?{}:{documentPrefix:text(input.documentPrefix,"embedding documentPrefix")}),
+    ...(input.encodingProfile===undefined?{}:{encodingProfile:text(input.encodingProfile,"embedding encodingProfile")}),
+    ...(input.maxTokens===undefined?{}:{maxTokens:integer(input.maxTokens,1,8192,"embedding maxTokens")})};
 }
 function vector(value:unknown,dimensions:number):number[]{
   if(!Array.isArray(value)||value.length!==dimensions||value.some(number=>typeof number!=="number"||!Number.isFinite(number)))fail("embedding vector has wrong dimensions or nonfinite values");

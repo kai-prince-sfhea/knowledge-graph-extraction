@@ -2,7 +2,7 @@
 
 An experimental Quarto extension that turns explicit, scoped author declarations into a validated public knowledge graph. Different meanings of the same word retain different identities. Native Quarto pages, definitions, theorems and citations remain the authored source.
 
-Version **0.0.6** targets ordinary HTML output from Quarto projects. The verified baseline is **Quarto 1.11.5 pre-release on Windows**. Quarto supplies Lua/Pandoc and Deno; authors do not need Node or npm.
+Version **0.0.7** targets ordinary HTML output from Quarto projects. The verified baseline is **Quarto 1.11.5 pre-release on Windows**. Quarto supplies Lua/Pandoc and Deno; authors do not need Node or npm.
 
 | Scope | Current support |
 |---|---|
@@ -186,7 +186,11 @@ quarto run _extensions/kai-prince-sfhea/knowledge-graph-extraction/author.ts hel
 
 Review explicitly selects candidates and writes a separate private patch/receipt. Merge approved entries into `knowledge.yml` yourself, then render again. New objects default private; mathematical macro extraction and automatic relation inference are not implemented.
 
-AI policy defaults are **EmbeddingGemma 300M** (`google/embeddinggemma-300m`, 768 dimensions), **Gemma 4 E2B** (`google/gemma-4-E2B`) and disabled **GLiNER2.5 Multi** (`fastino/gliner2.5-multi-v1`). Nested keys are `ai.embedding.model`, `ai.embedding.dimensions` (128/256/512/768), `ai.generation.model`, `ai.extraction.model` and `ai.extraction.enabled`. Enabling GLiNER inference is refused because that execution path is not implemented.
+AI policy defaults are **EmbeddingGemma 2** (`google/embeddinggemma-2`, 768 dimensions), **Gemma 4 E2B** (`google/gemma-4-E2B`) and disabled **GLiNER2.5 Multi** (`fastino/gliner2.5-multi-v1`). Nested keys are `ai.embedding.model`, `ai.embedding.dimensions` (128/256/512/768), `ai.generation.model`, `ai.extraction.model` and `ai.extraction.enabled`. Enabling GLiNER inference is refused because that execution path is not implemented.
+
+The explicit local encoder uses EmbeddingGemma 2's text-only profile on CPU in float32, its `SearchQuery`/`Document` retrieval prompts and normalized vectors. It refuses inputs over the smaller of the local runtime's sequence limit and 8,192 tokens, including the prefix. Caller-installed Sentence Transformers must support the model; the current official export requires version 6.1.0 or later. See [Google's inference guide](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers) and [model configuration](https://huggingface.co/google/embeddinggemma-2/blob/main/config_sentence_transformers.json).
+
+When upgrading from 300M, supply a separately reviewed, hash-pinned local EmbeddingGemma 2 artifact/runtime manifest and rebuild both index and query embeddings. Do not rename an old model directory, change an existing vector's model label or mix the two spaces even at the same dimensions. The original 300M encoder remains available through an explicit manifest and its 2,048-token profile. Model, artifact, runtime, dimensions, prefixes, encoding profile and effective token limit distinguish new vectors; existing vector imports must name their encoder explicitly. Optional embedding files and private suggestions are separate from the deterministic graph cache; `build.ts reset` does not migrate or erase them.
 
 Explicit `assist.ts` commands can probe caller-installed runtimes, encode local embeddings, generate local LiteRT-LM suggestions and accept reviewed IDs into a private patch:
 

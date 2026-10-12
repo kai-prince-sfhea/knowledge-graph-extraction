@@ -69,7 +69,11 @@ def verify(manifest: dict) -> dict:
         raise ValueError("Pinned encoder artifact files are missing.")
     modules = json.loads((root / "modules.json").read_text(encoding="utf-8"))
     allowed = {"sentence_transformers.models.Transformer", "sentence_transformers.models.Pooling",
-               "sentence_transformers.models.Normalize", "sentence_transformers.models.Dense"}
+               "sentence_transformers.models.Normalize", "sentence_transformers.models.Dense",
+               # The official EmbeddingGemma 2 export uses these standard module names.
+               "sentence_transformers.base.modules.transformer.Transformer",
+               "sentence_transformers.sentence_transformer.modules.pooling.Pooling",
+               "sentence_transformers.base.modules.normalize.Normalize"}
     if not isinstance(modules, list) or not modules:
         raise ValueError("Encoder requires a standard Sentence Transformers modules.json profile.")
     for module in modules:
@@ -90,22 +94,40 @@ def encode(input: dict) -> dict:
         raise ValueError("Encoder adapter SHA-256 mismatch.")
     provenance = verify(request["manifest"])
     from sentence_transformers import SentenceTransformer
+    import torch
     policy = request["manifest"]["embedding"]
-    model = SentenceTransformer(policy["directory"], device="cpu", local_files_only=True,
-                                trust_remote_code=False, truncate_dim=policy["dimensions"])
-    query_prefix, document_prefix = model.prompts.get("query"), model.prompts.get("document")
+    version_two = policy["model"] == "google/embeddinggemma-2"
+    options = {"device": "cpu", "local_files_only": True, "trust_remote_code": False,
+               "truncate_dim": policy["dimensions"], "model_kwargs": {"torch_dtype": torch.float32}}
+    if version_two:
+        options["config_kwargs"] = {"vision_config": None, "audio_config": None}
+    model = SentenceTransformer(policy["directory"], **options)
+    if model.dtype != torch.float32:
+        raise ValueError("CPU encoder must use float32; float16 is unsafe for EmbeddingGemma 2.")
+    query_name, document_name = ("SearchQuery", "Document") if version_two else ("query", "document")
+    query_prefix, document_prefix = model.prompts.get(query_name), model.prompts.get(document_name)
     if not isinstance(query_prefix, str) or not query_prefix or not isinstance(document_prefix, str) or not document_prefix:
         raise ValueError("Encoder model must declare query/document task prefixes.")
-    provenance.update({"queryPrefix": query_prefix, "documentPrefix": document_prefix})
-    maximum = min(int(model.max_seq_length), 2048)
+    if version_two and (query_prefix != "task: search result | query: " or document_prefix != "title: none | text: "):
+        raise ValueError("EmbeddingGemma 2 requires its standard SearchQuery/Document retrieval prompts.")
+    maximum = min(int(model.max_seq_length), 8192 if version_two else 2048)
+    if maximum < 1:
+        raise ValueError("Encoder must declare a positive token budget.")
+    provenance.update({"queryPrefix": query_prefix, "documentPrefix": document_prefix,
+                       "encodingProfile": "embeddinggemma-2-text-search-f32-v1" if version_two else "legacy-text-search-f32-v1",
+                       "maxTokens": maximum})
 
     def vector(text: str, query: bool) -> list[float]:
         prefix = query_prefix if query else document_prefix
         count = len(model.tokenizer(prefix + text, truncation=False, add_special_tokens=True)["input_ids"])
         if count > maximum:
             raise ValueError("Encoder input exceeds its token budget; select a smaller source slice/window. Silent truncation is refused.")
-        values = (model.encode_query(text, normalize_embeddings=True, show_progress_bar=False) if query else
-                  model.encode_document(text, normalize_embeddings=True, show_progress_bar=False)).tolist()
+        if version_two:
+            values = model.encode(text, prompt_name=query_name if query else document_name,
+                                  truncate_dim=policy["dimensions"], normalize_embeddings=True, show_progress_bar=False).tolist()
+        else:
+            values = (model.encode_query(text, normalize_embeddings=True, show_progress_bar=False) if query else
+                      model.encode_document(text, normalize_embeddings=True, show_progress_bar=False)).tolist()
         if len(values) != policy["dimensions"] or not all(math.isfinite(value) for value in values) or not any(value != 0 for value in values):
             raise ValueError("Encoder returned invalid dimensions/nonfinite/zero values.")
         return values

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.7 — EmbeddingGemma 2 migration — 12 October 2026
+
+- Default to `google/embeddinggemma-2` at 768 dimensions for embedding policy and explicit local authoring manifests; deterministic renders still perform no inference or downloads.
+- Admit the official standard module paths, use text-only CPU float32 loading and explicit `SearchQuery`/`Document` prompts. Respect the smaller of the pinned runtime limit and 8,192 tokens without silent truncation; retain explicit legacy 300M manifests at 2,048 tokens.
+- Record encoding-profile/token-limit provenance and require model identity on imported vectors. Refuse mismatched model/artifact/runtime/dimension/prefix/profile identities. Rebuild index and query embeddings for the new space; do not relabel or mix old vectors.
+- Preserve hash-pinned local artifact/runtime inventories, private review material and native deterministic authoring. Real-model compatibility and retrieval quality remain unverified; fake adapters establish protocol behavior only.
+- No declaration/public format migration is introduced. Changed extractor dependency hashes invalidate prior reuse/frozen contexts; make a reviewed complete update render. Embedding files require a separate explicit re-encoding workflow.
+
 ## 0.0.6 — initial experimental public source — 9 October 2026
 
 - Adopt Apache License 2.0 after the owner's third-party and AI-assisted contribution review; retain separate terms for caller-installed runtimes/models and consumer-authored content/data.
