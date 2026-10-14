@@ -2,7 +2,7 @@
 
 An experimental Quarto extension that turns explicit, scoped author declarations into a validated public knowledge graph. Different meanings of the same word retain different identities. Native Quarto pages, definitions, theorems and citations remain the authored source.
 
-Version **0.0.7** targets ordinary HTML output from Quarto projects. The verified baseline is **Quarto 1.11.5 pre-release on Windows**. Quarto supplies Lua/Pandoc and Deno; authors do not need Node or npm.
+Version **0.0.8** targets ordinary HTML output from Quarto projects. The verified baseline is **Quarto 1.11.5 pre-release on Windows**. Quarto supplies Lua/Pandoc and Deno; authors do not need Node or npm.
 
 | Scope | Current support |
 |---|---|
@@ -101,6 +101,13 @@ Place graph-wide options under `knowledge-graph` in the effective **project** co
 | `exports` | Disabled; optional JSON-LD, CSV and public JSON Schema exports. |
 
 Declaration, schema and source paths must stay within the project. A page-level `knowledge-graph.enabled: false` leaves that selected page unobserved and makes coverage incomplete; other graph policy remains project-wide. Quarto profiles, selected inputs and actual `output-file` mappings determine scope and destinations.
+
+Keep one complete graph-policy mapping at its intended project/profile layer;
+do not assume arbitrary partial namespace mappings are deep-merged or that a
+metadata-file value overrides an explicit document mapping. A document flag
+controls that page's observation, not the authoritative project graph policy.
+Native hook lists can accumulate across project/profile metadata; add only your
+own hooks and let installation contribute the extension's hooks once.
 
 <details>
 <summary>Custom schema and difficulty properties</summary>
@@ -211,6 +218,15 @@ Preserve canonical sources, schemas, private reviews and reviewed baselines, the
 This experimental extension has no security certification or supported production release. Its publication and integrity checks are bounded safeguards; they do not secure or audit a whole Quarto website. The planned Content Security Protocol extension is not implemented here.
 
 Only explicitly public graph records are serialized, but ordinary rendered prose and native `data-kg-*` attributes remain visible. Keep `.quarto/knowledge-graph/`, private review/history, prompts, local model manifests and model artifacts out of publication resources. Review resolved paths and all content before sharing output. Cache reset retains private review/history and is not secure erasure.
+
+Schema/model validation messages omit authored vocabulary, unknown field names
+and values; safe entry/rule ordinals refer to input iteration, not source lines.
+Observation-write failures give a storage remedy without repeating native
+filesystem details. Failed local adapters do not replay arbitrary stderr into
+their diagnostic. Explicit private suggestion sidecars retain the exact raw
+model response for review. These boundaries do not sanitize ordinary native
+output, parser/tool exceptions or complete render/CLI logs; keep those private
+and redact them before sharing.
 
 Hashes detect corruption or staleness; they do not authenticate a producer or establish truth. Native subprocesses and caller-selected AI adapters execute code and are not confined by `QUARTO_RUN_NO_NETWORK`. That setting controls Quarto's cached import dispatch, not operating-system network access.
 

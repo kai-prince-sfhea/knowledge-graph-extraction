@@ -60,7 +60,9 @@ export async function invokePython(python:string,args:string[],input:Data|undefi
   try{
     const [stdout,stderr,status]=await Promise.all(operations);
     if(failure)fail(failure);
-    if(!status.success)fail(`local adapter failed: ${new TextDecoder().decode(stderr).slice(-1500)}`);
+    // Adapter output can contain prompts, paths or credentials. A failure must
+    // not replay that arbitrary stream into the renderer/terminal diagnostic.
+    if(!status.success)fail("local adapter failed; inspect the selected runtime/model privately and retry with a synthetic input");
     try{return JSON.parse(new TextDecoder().decode(stdout));}catch{fail("local adapter returned an invalid protocol response");}
   }catch(error){
     stop(error instanceof Error?error.message:String(error));await Promise.allSettled(operations);fail(failure!);

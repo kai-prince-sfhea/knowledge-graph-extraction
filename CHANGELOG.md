@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.8 — private diagnostics refinement — 14 October 2026
+
+- Keep authored schema/type/property names and unknown model-policy fields out
+  of validation diagnostics; retain safe entry/rule context and refusal rules.
+- Give actionable observation-storage failures without native filesystem error
+  details, and avoid replaying arbitrary failed-adapter stderr into CLI errors.
+- Clarify authoritative project/page configuration, hook accumulation and the
+  separate privacy boundaries of ordinary logs and exact private review data.
+- Preserve declaration/public/cache/baseline formats and valid graph semantics.
+  Changed runtime dependency hashes invalidate old reuse/frozen contexts; make a
+  reviewed complete update render before exporting a new portable baseline.
+
+
 ## 0.0.7 — EmbeddingGemma 2 migration — 12 October 2026
 
 - Default to `google/embeddinggemma-2` at 768 dimensions for embedding policy and explicit local authoring manifests; deterministic renders still perform no inference or downloads.

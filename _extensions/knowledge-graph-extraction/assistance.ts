@@ -11,7 +11,7 @@ function map(value: unknown, name: string): Data {
 }
 function fields(value: Data, allowed: string[], name: string): void {
   const unknown = Object.keys(value).find(key => !allowed.includes(key));
-  if (unknown) fail(`${name} contains unsupported field '${unknown}'`);
+  if (unknown) fail(`${name} contains an unsupported field; use the documented fields`);
 }
 function text(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim() || /[\u0000-\u001f]/.test(value)) fail(`${name} must be nonempty text`);
@@ -224,8 +224,9 @@ function embeddingProvenance(value:unknown):Data{
   const dimensions=integer(input.dimensions,1,768,"embedding dimensions");
   if(![128,256,512,768].includes(dimensions))fail("EmbeddingGemma dimensions must be 128, 256, 512 or 768");
   const runtime=map(input.runtime,"embedding runtime");fields(runtime,["name","version","sha256","licence","dependencies"],"embedding runtime");
-  const dependencies:Data={};if(runtime.dependencies!==undefined)for(const [name,raw] of Object.entries(map(runtime.dependencies,"embedding dependencies"))){
-    const item=map(raw,`embedding dependency '${name}'`);fields(item,["version","sha256","licence"],`embedding dependency '${name}'`);
+  const dependencies:Data={};let dependencyOrdinal=0;if(runtime.dependencies!==undefined)for(const [name,raw] of Object.entries(map(runtime.dependencies,"embedding dependencies"))){
+    const field=`embedding dependencies entry ${++dependencyOrdinal}`;
+    const item=map(raw,field);fields(item,["version","sha256","licence"],field);
     dependencies[name]={version:text(item.version,"dependency.version"),sha256:hash(item.sha256,"dependency.sha256"),licence:text(item.licence,"dependency.licence")};
   }
   // Existing vectors must name their encoder; a changed default must never relabel old data.

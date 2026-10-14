@@ -97,7 +97,7 @@ async function inspect(root: string, input?: string): Promise<RecordValue> {
   const result = await new Deno.Command(executable, {
     args: ["inspect", input ?? root], cwd: root, stdout: "piped", stderr: "piped",
   }).output();
-  if (!result.success) fail(`Quarto could not inspect ${input ?? "the project"}; run quarto inspect to diagnose the project configuration`);
+  if (!result.success) fail("Quarto could not inspect a selected input/project; run quarto inspect privately to diagnose its configuration");
   try { return record(JSON.parse(new TextDecoder().decode(result.stdout)), "Quarto inspection"); }
   catch { fail("Quarto inspect did not return valid project JSON"); }
 }

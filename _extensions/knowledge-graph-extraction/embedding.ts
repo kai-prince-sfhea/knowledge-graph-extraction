@@ -3,7 +3,7 @@ import { canonical, sha256 } from "./assistance.ts";
 type Data=Record<string,any>;
 function fail(message:string):never{throw new Error(`knowledge-graph-extraction: ${message}`);}
 function map(value:unknown,name:string):Data{if(!value||typeof value!=="object"||Array.isArray(value))fail(`${name} must be a mapping`);return value as Data;}
-function fields(value:Data,allowed:string[],name:string):void{const key=Object.keys(value).find(key=>!allowed.includes(key));if(key)fail(`${name} contains unsupported field '${key}'`);}
+function fields(value:Data,allowed:string[],name:string):void{const key=Object.keys(value).find(key=>!allowed.includes(key));if(key)fail(`${name} contains an unsupported field; use the documented fields`);}
 function text(value:unknown,name:string):string{if(typeof value!=="string"||!value.trim()||/[\u0000-\u001f]/.test(value))fail(`${name} must be nonempty text`);return value;}
 function hash(value:unknown,name:string):string{if(typeof value!=="string"||!/^[a-f0-9]{64}$/.test(value))fail(`${name} must be a lowercase SHA-256 digest`);return value;}
 function pinned(value:unknown,name:string):Data{const item=map(value,name);fields(item,["version","sha256","licence"],name);return {version:text(item.version,`${name}.version`),sha256:hash(item.sha256,`${name}.sha256`),licence:text(item.licence,`${name}.licence`)};}

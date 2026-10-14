@@ -14,7 +14,7 @@ function mapping(value: unknown, name: string): Mapping {
   return value as Mapping;
 }
 function keys(value: Mapping, allowed: string[], name: string): void {
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(`${name} contains unsupported field '${key}'`);
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(`${name} contains an unsupported field; use the documented schema fields`);
 }
 function name(value: string, context: string): string {
   if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(value) || ["__proto__", "constructor", "prototype"].includes(value)) {
@@ -35,32 +35,34 @@ const reservedProperties = ["id", "type", "scope", "labels", "aliases", "review"
   "origin", "eligible", "properties", "from", "to", "weight"];
 function properties(value: unknown, context: string): Record<string, PropertyRule> {
   const result: Record<string, PropertyRule> = {};
+  let ordinal = 0;
   for (const [key, raw] of Object.entries(mapping(value === undefined ? {} : value, `${context}.properties`))) {
+    const field = `${context}.properties entry ${++ordinal}`;
     name(key, "property name");
-    if (reservedProperties.includes(key)) fail(`property '${key}' is reserved by the identity/provenance contract`);
-    const rule = mapping(raw, `property '${key}'`);
-    keys(rule, ["type", "required", "enum", "minimum", "maximum"], `property '${key}'`);
-    if (!["string", "number", "boolean"].includes(rule.type as string)) fail(`property '${key}' has an unsupported scalar type`);
-    if (rule.required !== undefined && typeof rule.required !== "boolean") fail(`property '${key}'.required must be boolean`);
+    if (reservedProperties.includes(key)) fail(`${field} is reserved by the identity/provenance contract`);
+    const rule = mapping(raw, field);
+    keys(rule, ["type", "required", "enum", "minimum", "maximum"], field);
+    if (!["string", "number", "boolean"].includes(rule.type as string)) fail(`${field} has an unsupported scalar type`);
+    if (rule.required !== undefined && typeof rule.required !== "boolean") fail(`${field}.required must be boolean`);
     const parsed: PropertyRule = { type: rule.type as PropertyRule["type"], required: rule.required === true };
     for (const bound of ["minimum", "maximum"] as const) {
       if (rule[bound] !== undefined) {
         if (parsed.type !== "number" || typeof rule[bound] !== "number" || !Number.isFinite(rule[bound])) {
-          fail(`property '${key}'.${bound} requires a finite number constraint on a number property`);
+          fail(`${field}.${bound} requires a finite number constraint on a number property`);
         }
         parsed[bound] = rule[bound];
       }
     }
     if (parsed.minimum !== undefined && parsed.maximum !== undefined && parsed.minimum > parsed.maximum) {
-      fail(`property '${key}' has minimum greater than maximum`);
+      fail(`${field} has minimum greater than maximum`);
     }
     if (rule.enum !== undefined) {
-      if (!Array.isArray(rule.enum) || !rule.enum.length) fail(`property '${key}'.enum must be a nonempty sequence`);
-      parsed.enum = rule.enum.map(value => scalar(value, parsed.type, `property '${key}'.enum`));
-      if (new Set(parsed.enum.map(value => JSON.stringify(value))).size !== parsed.enum.length) fail(`property '${key}'.enum contains duplicates`);
+      if (!Array.isArray(rule.enum) || !rule.enum.length) fail(`${field}.enum must be a nonempty sequence`);
+      parsed.enum = rule.enum.map(value => scalar(value, parsed.type, `${field}.enum`));
+      if (new Set(parsed.enum.map(value => JSON.stringify(value))).size !== parsed.enum.length) fail(`${field}.enum contains duplicates`);
       if (parsed.enum.some(value => typeof value === "number" &&
         ((parsed.minimum !== undefined && value < parsed.minimum) || (parsed.maximum !== undefined && value > parsed.maximum)))) {
-        fail(`property '${key}'.enum exceeds its numeric bounds`);
+        fail(`${field}.enum exceeds its numeric bounds`);
       }
       parsed.enum.sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0);
     }
@@ -71,7 +73,7 @@ function properties(value: unknown, context: string): Record<string, PropertyRul
 function publicFields(value: unknown, rules: Record<string, PropertyRule>, context: string): string[] {
   if (!Array.isArray(value) || value.some(field => typeof field !== "string")) fail(`${context}.public-fields must be a sequence of property names`);
   if (new Set(value).size !== value.length) fail(`${context}.public-fields contains duplicates`);
-  for (const field of value) if (!Object.hasOwn(rules, field)) fail(`${context}.public-fields names undeclared property '${field}'`);
+  for (const field of value) if (!Object.hasOwn(rules, field)) fail(`${context}.public-fields names an undeclared property; declare it first`);
   return [...value].sort();
 }
 function objectRule(raw: unknown, context: string, base?: ObjectRule, relation = false): ObjectRule {
@@ -81,7 +83,7 @@ function objectRule(raw: unknown, context: string, base?: ObjectRule, relation =
   const merged = { ...base?.properties, ...additions };
   for (const key of Object.keys(additions)) {
     if (base && Object.hasOwn(base.properties, key) && JSON.stringify(base.properties[key]) !== JSON.stringify(additions[key])) {
-      fail(`${context} cannot change inherited property '${key}'; select a new schema/type and migrate explicitly`);
+      fail(`${context} cannot change inherited property rules; select a new schema/type and migrate explicitly`);
     }
   }
   const result: ObjectRule = { properties: merged,
@@ -97,7 +99,7 @@ function endpoints(raw: unknown, objectTypes: Record<string, ObjectRule>, contex
     if (raw.length !== 1) fail(`${context}: '*' must be the only endpoint type`);
     return ["*"];
   }
-  for (const type of raw) if (!Object.hasOwn(objectTypes, type)) fail(`${context} refers to unknown object type '${type}'`);
+  for (const type of raw) if (!Object.hasOwn(objectTypes, type)) fail(`${context} refers to an unknown object type; declare each endpoint type first`);
   return [...raw].sort();
 }
 
@@ -121,61 +123,66 @@ export function parseSchema(value?: unknown): SchemaContract {
   if (input.extends !== undefined && input.extends !== "default") fail("schema.extends only supports 'default'; external or executable inheritance is unsupported");
   const result: SchemaContract = input.extends === "default" ? defaultSchema() : { version: 0, objectTypes: {}, relationTypes: {} };
   const objectTypes = mapping(input["object-types"] === undefined && input.extends === "default" ? {} : input["object-types"], "schema.object-types");
+  let objectOrdinal = 0;
   for (const [type, raw] of Object.entries(objectTypes)) {
     name(type, "object type");
-    result.objectTypes[type] = objectRule(raw, `object type '${type}'`, Object.hasOwn(result.objectTypes, type) ? result.objectTypes[type] : undefined);
+    result.objectTypes[type] = objectRule(raw, `schema.object-types entry ${++objectOrdinal}`, Object.hasOwn(result.objectTypes, type) ? result.objectTypes[type] : undefined);
   }
   if (!Object.keys(result.objectTypes).length) fail("schema needs at least one object type");
   const relations = mapping(input["relation-types"] === undefined && input.extends === "default" ? {} : input["relation-types"], "schema.relation-types");
   const builtins = defaultSchema().relationTypes;
+  let relationOrdinal = 0;
   for (const [type, raw] of Object.entries(relations)) {
+    const field = `schema.relation-types entry ${++relationOrdinal}`;
     name(type, "relation type");
-    const inputRule = mapping(raw, `relation type '${type}'`);
+    const inputRule = mapping(raw, field);
     const inherited = Object.hasOwn(result.relationTypes, type) ? result.relationTypes[type] : undefined;
-    const from = endpoints(inputRule.from === undefined ? inherited?.from : inputRule.from, result.objectTypes, `relation '${type}'.from`);
-    const to = endpoints(inputRule.to === undefined ? inherited?.to : inputRule.to, result.objectTypes, `relation '${type}'.to`);
+    const from = endpoints(inputRule.from === undefined ? inherited?.from : inputRule.from, result.objectTypes, `${field}.from`);
+    const to = endpoints(inputRule.to === undefined ? inherited?.to : inputRule.to, result.objectTypes, `${field}.to`);
     const fixed = Object.hasOwn(builtins, type) ? builtins[type] : undefined;
     if (fixed && (JSON.stringify(from) !== JSON.stringify(fixed.from) || JSON.stringify(to) !== JSON.stringify(fixed.to))) {
-      fail(`relation '${type}' cannot change built-in endpoint meanings; choose a new relation name and migrate explicitly`);
+      fail(`${field} cannot change built-in endpoint meanings; choose a new relation name and migrate explicitly`);
     }
-    result.relationTypes[type] = { ...objectRule(raw, `relation type '${type}'`, inherited, true), from, to };
+    result.relationTypes[type] = { ...objectRule(raw, field, inherited, true), from, to };
   }
   // Also validate inherited endpoints after the complete object vocabulary exists.
-  for (const [type, rule] of Object.entries(result.relationTypes)) {
-    endpoints(rule.from, result.objectTypes, `relation '${type}'.from`);
-    endpoints(rule.to, result.objectTypes, `relation '${type}'.to`);
+  for (const rule of Object.values(result.relationTypes)) {
+    endpoints(rule.from, result.objectTypes, 'selected relation.from');
+    endpoints(rule.to, result.objectTypes, 'selected relation.to');
   }
   return result;
 }
 
 export function validateObjectType(schema: SchemaContract, type: unknown): string {
-  if (typeof type !== "string" || !Object.hasOwn(schema.objectTypes, type)) fail(`unsupported object type '${String(type)}' in selected schema`);
+  if (typeof type !== "string" || !Object.hasOwn(schema.objectTypes, type)) fail('unsupported object type in selected schema; select a declared object type');
   return type;
 }
 export function validateRelationEndpoints(schema: SchemaContract, type: unknown, fromType: unknown, toType: unknown): string {
-  if (typeof type !== "string" || !Object.hasOwn(schema.relationTypes, type)) fail(`unsupported relation type '${String(type)}' in selected schema`);
+  if (typeof type !== "string" || !Object.hasOwn(schema.relationTypes, type)) fail('unsupported relation type in selected schema; select a declared relation type');
   const from = validateObjectType(schema, fromType), to = validateObjectType(schema, toType);
   const rule = schema.relationTypes[type];
   if (!(rule.from.includes("*") || rule.from.includes(from)) || !(rule.to.includes("*") || rule.to.includes(to))) {
-    fail(`relation '${type}' requires permitted endpoints (${rule.from.join("|")} → ${rule.to.join("|")}); received ${from} → ${to}`);
+    fail('selected relation requires permitted endpoints; match its declared from/to type rules');
   }
   return type;
 }
 export function validateProperties(schema: SchemaContract, kind: "object" | "relation", type: string, value?: unknown): Record<string, Scalar> {
   const rules = kind === "object" ? schema.objectTypes : schema.relationTypes;
-  if (!Object.hasOwn(rules, type)) fail(`unsupported ${kind} type '${type}' in selected schema`);
-  const input = mapping(value === undefined ? {} : value, `${kind} '${type}'.properties`);
+  if (!Object.hasOwn(rules, type)) fail(`unsupported ${kind} type in selected schema; select a declared type`);
+  const input = mapping(value === undefined ? {} : value, `${kind}.properties`);
   const result: Record<string, Scalar> = {};
-  for (const key of Object.keys(input)) if (!Object.hasOwn(rules[type].properties, key)) fail(`${kind} '${type}' has unknown property '${key}'`);
+  for (const key of Object.keys(input)) if (!Object.hasOwn(rules[type].properties, key)) fail(`${kind} has an unknown property; use its declared property rules`);
+  let ordinal = 0;
   for (const [key, rule] of Object.entries(rules[type].properties)) {
+    const field = `${kind}.properties rule ${++ordinal}`;
     if (!Object.hasOwn(input, key)) {
-      if (rule.required) fail(`${kind} '${type}' requires property '${key}'`);
+      if (rule.required) fail(`${field} requires property presence; supply its declared value`);
       continue;
     }
-    const parsed = scalar(input[key], rule.type, `${kind} '${type}'.properties.${key}`);
-    if (rule.enum && !rule.enum.includes(parsed)) fail(`${kind} '${type}'.properties.${key} is outside its declared enum`);
+    const parsed = scalar(input[key], rule.type, field);
+    if (rule.enum && !rule.enum.includes(parsed)) fail(`${field} is outside its declared enum`);
     if (typeof parsed === "number" && ((rule.minimum !== undefined && parsed < rule.minimum) ||
-      (rule.maximum !== undefined && parsed > rule.maximum))) fail(`${kind} '${type}'.properties.${key} is outside its numeric bounds`);
+      (rule.maximum !== undefined && parsed > rule.maximum))) fail(`${field} is outside its numeric bounds`);
     result[key] = parsed;
   }
   return result;
@@ -190,7 +197,7 @@ export function publicRecord(schema: SchemaContract, kind: "object" | "relation"
   if (value.eligible !== true) fail(`cannot project an ineligible ${kind}`);
   const type = String(value.type);
   const rule = (kind === "object" ? schema.objectTypes : schema.relationTypes)[type];
-  if (!rule) fail(`unsupported ${kind} type '${type}' in selected schema`);
+  if (!rule) fail(`unsupported ${kind} type in selected schema; select a declared type`);
   const values = validateProperties(schema, kind, type, value.properties);
   if (kind === "relation" && type === "requires" && typeof values["prerequisite-group"] === "string" &&
     values["prerequisite-group"].length > 0 && !rule.publicFields.includes("prerequisite-group")) {

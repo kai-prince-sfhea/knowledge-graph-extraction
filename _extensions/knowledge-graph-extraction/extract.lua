@@ -125,17 +125,16 @@ local function write_observation(project_directory, run, observation)
   local temporary = destination .. ".pending"
   local handle, open_error = io.open(io_path(temporary), "wb")
   if not handle then
-    fail("cannot create local observation: " .. tostring(open_error))
+    fail("cannot create local observation; check private state directory permissions and available space, then prepare a new run")
   end
   local written, write_error = handle:write(quarto.json.encode(observation), "\n")
   local closed, close_error = handle:close()
   if not written or not closed then
-    fail("cannot finish local observation: " ..
-      tostring(write_error or close_error))
+    fail("cannot finish local observation; check private state storage, then prepare a new run")
   end
   local renamed, rename_error = os.rename(io_path(temporary), io_path(destination))
   if not renamed then
-    fail("cannot commit local observation: " .. tostring(rename_error))
+    fail("cannot commit local observation; check private state directory permissions, then prepare a new run")
   end
 end
 
