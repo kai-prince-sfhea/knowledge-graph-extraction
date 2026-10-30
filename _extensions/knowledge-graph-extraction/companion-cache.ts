@@ -1,3 +1,4 @@
+// Copyright 2026 Kai Prince. SPDX-License-Identifier: Apache-2.0
 // A version string alone cannot certify a transform's dependency contract.
 // These exact installed payload fingerprints were reviewed with KG 0.0.10.
 // Unknown/modified packages retain the fresh-AST requirement; no code is loaded.
@@ -10,6 +11,28 @@ export const companionPayloads: Record<string, {version: string; hash: string}> 
   'additional-citation-options': {version: '1.1.0-dev.3', hash: '32f5448f769e5943fe4b5d03769f0073167ff108a232b88f26f65f9e1624802f'},
 };
 
+/** Additional exact payloads with separately reviewed native input contracts.
+ * Never derive admissions from mutable sibling folders or version strings. */
+export const reviewedCurrentCompanionPayloads: Record<string, {
+  version: string; hash: string; contract: 'current-v1'; review: string;
+}[]> = {
+  "accessible-maths": [{version:"0.0.10",hash:"37710f7096a96c4b680c9840a64549e6c2baece8dec17ee53fab3cc7449ecb00",contract:"current-v1",review:"native-input-contract-v1-20261030-am10"}],
+  "maths-knowledge-graph": [{version:"0.0.10",hash:"d9b1dadc6fae14893f05d148240fc4cae1d0d12b8db7cee69b8a2e1c07e39a94",contract:"current-v1",review:"native-input-contract-v1-20261030-mkg10-proof-focus"}],
+  "local-ai-websites": [{version:"0.0.13",hash:"bc84b2cd39ab376d35afccbdb806edc6e4e1a72c33c9c717bcbf65df75c9682b",contract:"current-v1",review:"native-input-contract-v1-20261030-la13-reader-focus"}],
+  "generative-websites": [{version:"0.0.13",hash:"86d8ccfb2502770c06de4aa832ea64001dc46ce8da0a1d485108906dbe2f230a",contract:"current-v1",review:"native-input-contract-v1-20261030-gw13-r8-owned-focus"}],
+  "interactive-cv": [{version:"0.0.11",hash:"51f27a8d78d3db27260db4b4de7fe8e072de2167016a191542557c9acf1cdf67",contract:"current-v1",review:"native-input-contract-v1-20261030-cv11-result-focus"}],
+  "additional-citation-options": [{version:"1.1.0-dev.6",hash:"1dda73ef47c752bf6f31f0c341fbd64ae1534550be7366eb8ee5faae9f33c04a",contract:"current-v1",review:"native-input-contract-v1-20261030-aco-dev6"}],
+};
+
+export function companionContract(name: string, version: unknown, hash: string): 'historical' | 'current-v1' | null {
+  if (!Object.hasOwn(companionPayloads, name) || typeof version !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) return null;
+  const expected = companionPayloads[name];
+  if (expected.version === version && expected.hash === hash) return 'historical';
+  const reviewed = Object.hasOwn(reviewedCurrentCompanionPayloads, name) ? reviewedCurrentCompanionPayloads[name] : [];
+  return reviewed.some(pair => pair.contract === 'current-v1' && typeof pair.review === 'string' && pair.review.length > 0
+    && pair.version === version && pair.hash === hash) ? 'current-v1' : null;
+}
+
 /** Match native named selectors only. Arbitrary Lua paths stay conservative. */
 export function companionReference(value: unknown): {name: string; directory: string} | null {
   const path = typeof value === 'string' ? value : value && typeof value === 'object' && !Array.isArray(value)
@@ -20,8 +43,7 @@ export function companionReference(value: unknown): {name: string; directory: st
 }
 
 export function compatibleCompanion(name: string, version: unknown, hash: string): boolean {
-  const expected = companionPayloads[name];
-  return !!expected && expected.version === version && expected.hash === hash;
+  return companionContract(name, version, hash) !== null;
 }
 
 /** These data files affect the reviewed transforms' authored output. Paths are

@@ -6,7 +6,7 @@ import { buildDelivery } from "./delivery.ts";
 import { inGraph, memberships } from "./memberships.ts";
 import { htmlIds } from "./html.ts";
 import { buildGraphView } from "./graph-view.ts";
-import { graphReportHtml } from "./graph-view.ts";
+import { graphReportHtml, graphReportAssets, graphRegionHtml } from "./graph-view.ts";
 import { sourceKeys } from "./cache.ts";
 import { buildFederation } from './federation.ts';
 type Value = Record<string, any>;
@@ -152,7 +152,8 @@ export async function compositionArtifacts(snapshotId: string, websiteGraph: Val
     const base = `graphs/${id}`, entry: Value = { ...definition, snapshotId, status, graph: `generations/${snapshotId}/${base}/graph.json`, index: `generations/${snapshotId}/${base}/index.json` };
     files[`${base}/graph.json`] = `${canonical(graph)}\n`;
     files[`${base}/index.json`] = `${canonical(graphIndex(graph))}\n`;
-    files[`${base}/report.html`] = graphReportHtml(graph, { sourcePrefix: "../../../../../", embedded: true });
+    files[`${base}/report.html`] = graphReportHtml(graph, { sourcePrefix: "../../../../../", embedded: true, view: project.viewOptions });
+    for (const [name, value] of Object.entries(await graphReportAssets())) files[`${base}/${name}`] = value;
     entry.report = `generations/${snapshotId}/${base}/report.html`;
     if (project.deliveryOptions) {
       const delivery = await buildDelivery(graph, project.deliveryOptions);
@@ -182,7 +183,8 @@ export async function compositionArtifacts(snapshotId: string, websiteGraph: Val
     files[`${base}/graph.json`]=`${canonical(graph)}\n`;
     files[`${base}/index.json`]=`${canonical(graphIndex(graph))}\n`;
     files[`${base}/mapping.json`]=`${canonical({snapshotId,mapping:result.mapping,sourceGraphs:result.sourceGraphs,diagnostics:result.diagnostics,routingSafe:result.routingSafe})}\n`;
-    files[`${base}/report.html`]=graphReportHtml(graph,{sourcePrefix:'../../../../../',embedded:true}).replace('</main>',`<p>Routing available: ${result.routingSafe ? 'yes' : 'no: unresolved public scope or prerequisites'}. <a href="mapping.json">Projection mapping and coverage</a>.</p></main>`);
+    files[`${base}/report.html`]=graphReportHtml(graph,{sourcePrefix:'../../../../../',embedded:true,view:project.viewOptions}).replace('</main>',`<p>Routing available: ${result.routingSafe ? 'yes' : 'no: unresolved public scope or prerequisites'}. <a href="mapping.json">Projection mapping and coverage</a>.</p></main>`);
+    for(const [name,value] of Object.entries(await graphReportAssets())) files[`${base}/${name}`]=value;
     registry.federation={id:'federated',label:project.federationOptions.label,snapshotId,status:graph.status,routingSafe:result.routingSafe,graph:`generations/${snapshotId}/${base}/graph.json`,report:`generations/${snapshotId}/${base}/report.html`,mapping:`generations/${snapshotId}/${base}/mapping.json`,navigation:false};
     if(result.routingSafe){
       const view=await buildGraphView(graph,{graphUrl:'graph.json',readingOptions:project.readingOptions,assetPrefix:'./',sourcePrefix:'../../../../../',reportUrl:'report.html',embedded:true,view:project.viewOptions,queryProfiles:project.queryProfiles});
@@ -227,7 +229,7 @@ export async function finishComposition(root: string, outputDir: string, composi
       if (id !== graph.id || !graph.navigation) return match;
       const relativeUrl = relative(dirname(path), join(output, "knowledge-graph", graph.navigation)).replaceAll("\\", "/");
       const href = relativeUrl.split("/").map(encodeURIComponent).join("/");
-      return `<div data-kg-graph="${escapeHtml(id)}" data-kg-producer-placeholder="1"><p><a href="${escapeHtml(href)}">Explore ${escapeHtml(graph.label)} in its own graph</a>. The graph includes a searchable text view and keyboard alternatives.${record.stale ? " Source data changed; render this page again to restore its graph records." : ""}</p><iframe class="cv-graph-frame" title="${escapeHtml(graph.label)} graph navigation" src="${escapeHtml(href)}" loading="lazy" width="800" height="768" sandbox="allow-scripts allow-same-origin allow-forms allow-top-navigation-by-user-activation"></iframe></div>`;
+      return graphRegionHtml(id, graph.label, href, record.stale);
     });
     if (changed !== html) await Deno.writeTextFile(path, changed);
     record.htmlHash = await digest(changed);

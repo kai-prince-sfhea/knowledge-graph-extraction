@@ -31,7 +31,7 @@ const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
 
 /** Place measured labels without changing world positions, zoom or graph state.
  * nodes: <=120 {id,label,x,y,radius} records, all coordinates already in pixels.
- * measureText(text,node): actual width at the fixed 12px screen font/weight.
+ * measureText(text,node): actual width at the fixed 13px screen font/weight.
  * x/y in each visible result are text-left and baseline screen coordinates.
  */
 export function layoutGraphLabels(nodes, options, measureText) {
@@ -47,7 +47,7 @@ export function layoutGraphLabels(nodes, options, measureText) {
     const id=text(raw.id,10000);if(!id||ids.has(id))fail();ids.add(id);
     return Object.freeze({id,label:text(raw.label,10000),x:number(raw.x,-10000000,10000000),y:number(raw.y,-10000000,10000000),radius:number(raw.radius,0,500)});
   }).sort((a,b)=>(a.id===selectedId?0:neighbourIds.has(a.id)?1:2)-(b.id===selectedId?0:neighbourIds.has(b.id)?1:2)||compare(a.id,b.id));
-  const occupied=[],result=[],padding=3,lineHeight=16,gap=5,innerWidth=width-2*inset,innerHeight=height-2*inset;
+  const occupied=[],result=[],padding=3,lineHeight=18,gap=5,innerWidth=width-2*inset,innerHeight=height-2*inset;
   for (const node of values) {
     const base={id:node.id,text:'',visible:false,reason:'collision',truncated:false},priority=node.id===selectedId?0:neighbourIds.has(node.id)?1:2;
     const hide=reason=>result.push(Object.freeze({...base,reason}));
@@ -85,7 +85,7 @@ export function layoutGraphLabels(nodes, options, measureText) {
     const chosen=candidates.find(candidate=>!occupied.some(box=>intersects(candidate.box,box)));
     if(!chosen){hide(candidates.length?'collision':'label-too-wide');continue;}
     const box=Object.freeze(chosen.box);occupied.push(box);
-    result.push(Object.freeze({id:node.id,text:chosen.text,visible:true,reason:'visible',truncated:chosen.truncated,side:chosen.side,x:box.left+padding,y:box.top+padding+12,box}));
+    result.push(Object.freeze({id:node.id,text:chosen.text,visible:true,reason:'visible',truncated:chosen.truncated,side:chosen.side,x:box.left+padding,y:box.top+padding+13,box}));
   }
   return Object.freeze(result);
 }

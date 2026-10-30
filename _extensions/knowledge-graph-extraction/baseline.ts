@@ -106,10 +106,11 @@ async function main(): Promise<void> {
   const order = (a: any, b: any) => canonical(a) < canonical(b) ? -1 : canonical(a) > canonical(b) ? 1 : 0;
   if (canonical(occurrences.sort(order)) !== canonical(bundle.graph.occurrences.map((item: any) => ({ target: item.target, source: item.source })).sort(order))) fail('baseline occurrences differ from current public declarations');
   const schema = project.schemaPath ? { version: project.schemaVersion, digest: project.schemaDigest } : undefined;
-  const publication = project.navigation || project.exportOptions || project.packageOptions ? {
-    ...(project.navigation ? { navigation: true, runtimeDigest: await digest(canonical(graphViewRuntimeIdentity(project.dependencies.filter((item: any) => item.kind === 'extractor'), project.viewOptions, project.queryProfiles))) } : {}),
+  const publication = {
+    runtimeDigest: await digest(canonical(graphViewRuntimeIdentity(project.dependencies.filter((item: any) => item.kind === 'extractor'), project.viewOptions, project.queryProfiles))),
+    ...(project.navigation ? { navigation: true } : {}),
     ...(project.exportOptions ? { exports: project.exportOptions } : {}),
-    ...(project.packageOptions ? { package: project.packageOptions } : {}) } : undefined;
+    ...(project.packageOptions ? { package: project.packageOptions } : {}) };
   if (canonical(bundle.graph.schema ?? null) !== canonical(schema ?? null)) fail('baseline schema differs from current configuration');
   const composition = compareBaselinePublication(bundle.graph.publication, publication);
   if (command === 'inspect') {

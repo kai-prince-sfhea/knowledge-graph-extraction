@@ -2,10 +2,13 @@
 
 An experimental Quarto extension that turns explicit, scoped author declarations into a validated public knowledge graph. Different meanings of the same word retain different identities. Native Quarto pages, definitions, theorems and citations remain the authored source.
 
-Version **0.0.16** is experimental development source targeting ordinary HTML
-output from Quarto projects. It adds explicitly reviewed semantic identity and
+Version **0.0.17** is experimental development source targeting ordinary HTML
+output from Quarto projects. This candidate improves report wrapping, graph
+controls and embedded theme integration. Its pure Node regressions pass; native
+rendering and browser review of this revision remain separate checks.
+Version 0.0.16 added explicitly reviewed semantic identity and
 coreference proposals through a caller-installed local server, with all new AI
-working files outside the project and Git repositories. The current full
+working files outside the project and Git repositories. The 0.0.16 full
 regression and fourteen installed semantic author-command checks passed on
 **Quarto 1.11.5 pre-release on Windows**. Earlier source/review, model-free batch
 and combined-project checks retain their recorded scopes. The earlier 0.0.13
@@ -272,10 +275,11 @@ knowledge-graph:
 ```
 
 All keys are optional. Omitted settings preserve the existing automatic colour
-scheme, automatic motion and comfortable diagram height. `auto` follows the
-browser's operating-system colour preference; the standalone navigator does
-not inherit a parent Quarto theme toggle through its iframe. Use `light` or
-`dark` for a site with a fixed colour scheme. System forced-colour modes retain
+scheme, automatic motion and comfortable diagram height. In a same-origin
+iframe, `auto` follows the nearest surrounding Quarto page's light/dark toggle.
+Standalone pages, other hosts and inaccessible cross-origin ancestors use the
+browser's operating-system colour preference. Explicit `light` or `dark` keeps
+the configured mode. System forced-colour modes retain
 priority. `motion: paused` starts quietly with an explicit **Resume layout**
 button; `auto` still starts paused for a reduced-motion preference. Dragging,
 force changes and movement buttons do not override a pause.
@@ -287,6 +291,21 @@ relation weights, difficulty costs or accepted routes. The height preset sizes
 the diagram inside its own page; the CV embed's outer height is configured
 separately through Interactive CV's documented CSS variable. Arbitrary CSS,
 remote style URLs and executable configuration are not accepted here.
+
+Source reports use the same local typography and theme colours, wrap long IDs
+and provenance, and remain styled when navigation is disabled. Their stylesheet
+is included in the immutable publication and runtime identity. The navigator
+places search first and keeps loading counts and diagram guidance in native
+disclosures. Source coverage and unavailable-detail messages stay visible.
+Labels have a slightly larger screen font; the full source list remains the
+alternative when diagram labels cannot fit. None of these presentation choices
+changes graph facts, force calculations, route acceptance or reader knowledge.
+
+When delayed search replaces the source list, a focused result keeps its place
+if the same record remains; otherwise focus returns to the search input.
+Delayed record selection preserves focus that the reader has moved elsewhere.
+Forgetting a source-page reading route moves focus from its removed control to
+the retained route heading, while leaving focus outside that panel in place.
 
 ### Offer named questions without author JavaScript
 
@@ -562,10 +581,16 @@ the corpus. Set `knowledge-graph.search-filter: false` to use native search alon
 ### Reuse observations with recognised companions
 
 No extra setting enables companion reuse. The coordinator recognises exact
-installed payload hashes as well as versions: Accessible Maths 0.0.6, Maths
-Knowledge Graph 0.0.4, Interactive CV/Generative Websites/Local AI Websites
-0.0.5 and Additional Citation Options 1.1.0-dev.3. Named selectors can be flat
-or owner-qualified. A modified payload, different version, arbitrary Lua path
+installed payload hashes as well as versions. The additional reviewed versions
+are Accessible Maths 0.0.10, Maths Knowledge Graph 0.0.10, Interactive CV 0.0.11,
+Generative Websites 0.0.13, Local AI Websites 0.0.13 and Additional Citation
+Options 1.1.0-dev.6. The current pairs include the separately reviewed final
+focus updates to Maths Knowledge Graph, Interactive CV, Local AI Websites and
+Generative Websites revision 8; their authored-input contracts are unchanged.
+Historical exact pairs remain admitted: Accessible Maths
+0.0.6, Maths Knowledge Graph 0.0.4, Interactive CV/Generative Websites/Local AI
+Websites 0.0.5 and Additional Citation Options 1.1.0-dev.3. Named selectors can be
+flat or owner-qualified. A modified payload, different version, arbitrary Lua path
 or unknown transform remains conservative and requires fresh AST observation;
 a version string alone does not make a package trusted.
 
@@ -580,6 +605,18 @@ combined-project partial renders reused eligible observations while retaining
 explicit incomplete coverage for sources needing fresh observation. Use a full
 project render when coverage becomes incomplete; this is not a universal warm
 preview or whole-site speed guarantee.
+
+For the additional reviewed versions, reuse tracks a conservative union of the
+project, directory, metadata-file, format and source/include contexts already
+read by the coordinator. No per-page inspection subprocess is added. Literal
+maths/proof inputs, CV catalogues and providers, website catalogues and prepared
+activity trees, and Local AI manifests/receipts retain bounded dependency checks.
+Model bytes are not opened by this collector. Ambiguous paths or providers,
+unsupported advanced data/syntax, unknown options and exceeded bounds require
+fresh observation for the affected source; unknown transforms still refuse
+reuse across the project. A new filesystem observation session checks freshness
+again at finalization. These finite contracts do not establish universal
+companion compatibility or whole-site incremental rendering.
 
 ### Publish optional topic fragments
 

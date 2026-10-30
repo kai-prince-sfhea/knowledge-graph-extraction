@@ -202,7 +202,11 @@ export async function initializeReadingRoute(element, environment = window, { si
     if (sameDocument) environment.dispatchEvent(new environment.CustomEvent('quarto-kg-reading-route-updated'));
   };
   const control = (label, action, id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-')) => { const button = document.createElement('button'); button.className = 'btn btn-secondary m-1'; button.id = 'kg-reading-' + id; button.type = 'button'; button.textContent = label; button.addEventListener('click', () => { try { action(); } catch { departing = false; say('This action could not use the current route. Choose a current graph route explicitly; no knowledge or proof was changed.'); } }); panel.append(button); return button; };
-  const forget = () => { const result = store.forget(config); panel.replaceChildren(heading, status); say(result.status === 'forgotten' ? 'Reading route forgotten locally. No reader knowledge was uploaded.' : 'The current page has forgotten the route, but browser storage could not be fully cleared. Use browser site-data controls.'); journey = null; };
+  const forget = () => { const result = store.forget(config), focused = document.activeElement;
+    const removedFocus = focused && focused !== heading && focused !== status && panel.contains(focused);
+    panel.replaceChildren(heading, status); say(result.status === 'forgotten' ? 'Reading route forgotten locally. No reader knowledge was uploaded.' : 'The current page has forgotten the route, but browser storage could not be fully cleared. Use browser site-data controls.'); journey = null;
+    if (removedFocus && !focused.isConnected) heading.focus({ preventScroll: true });
+  };
   try {
     if (retained.status !== 'available' || retained.value.snapshotId !== config.snapshotId) fail();
     const selected = config.graphs.find(item => item.id === retained.value.graphId); if (!selected) fail();

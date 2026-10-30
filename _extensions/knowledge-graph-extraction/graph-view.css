@@ -3,13 +3,18 @@
 :root {
   color-scheme: light dark; font: 1rem/1.55 system-ui,sans-serif;
   --kg-bg: #f7f8fb; --kg-panel: #fff; --kg-ink: #202736; --kg-subtle: #566174;
-  --kg-border: #d9dee8; --kg-grid: #e4e8f0; --kg-edge: #66758d; --kg-accent: #5a4bd7;
+  --kg-border: #d9dee8; --kg-control-border: #7c8799; --kg-grid: #e4e8f0; --kg-edge: #66758d; --kg-accent: #5a4bd7;
   --kg-node-halo: #fff;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--kg-bg); color: var(--kg-ink); overflow-wrap: anywhere; }
 main { min-width: 0; max-width: 80rem; margin: auto; padding: 1.3rem clamp(.8rem,3vw,2.5rem) 3rem; }
 main * { min-width: 0; }
+.kg-source-report main { max-width: 76ch; }
+.kg-source-report li { margin-block: .65rem; }
+.kg-source-report li > ul { padding-inline-start: 1.25rem; }
+.kg-source-report code { font-size: .9em; white-space: normal; overflow-wrap: anywhere; }
+.kg-source-report pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 a { color: LinkText; text-underline-offset: .16em; }
 h1,h2,h3 { line-height: 1.2; letter-spacing: -.02em; }
 h1 { font-size: clamp(1.55rem,3vw,2.25rem); }
@@ -17,19 +22,29 @@ main > h1 { margin-block: .2rem .5rem; }
 .kg-overview { margin-block: .4rem; font-size: .9rem; }
 .kg-provenance { font-size: .82rem; color: var(--kg-subtle); }
 .kg-provenance summary { cursor: pointer; }
+.kg-loading,.kg-diagram-guide { color: var(--kg-subtle); font-size: .9rem; margin-block: .6rem; }
+.kg-loading summary,.kg-diagram-guide summary { cursor: pointer; padding-block: .4rem; }
 #kg-status { font-size: .88rem; margin-block: .7rem; }
 h2 { font-size: 1.3rem; }
 section { margin-block: 1.6rem; }
 p,li,code,button { overflow-wrap: anywhere; }
 button,input,select { font: inherit; }
-button { padding: .48rem .8rem; max-width: 100%; white-space: normal; text-align: start; cursor: pointer; color: inherit; background: var(--kg-panel); border: 1px solid var(--kg-border); border-radius: .55rem; }
+button { padding: .48rem .8rem; max-width: 100%; white-space: normal; text-align: start; cursor: pointer; color: inherit; background: var(--kg-panel); border: 1px solid var(--kg-control-border); border-radius: .55rem; }
 button:hover { border-color: var(--kg-accent); }
 button:disabled { cursor: default; opacity: .55; }
 label { display: inline-flex; flex-direction: column; gap: .3rem; min-width: 0; max-width: 100%; }
 label:has(input[type=checkbox]) { flex-direction: row; align-items: center; }
 form,.kg-controls { display: flex; flex-wrap: wrap; align-items: end; gap: .6rem; margin-block: .8rem; }
 form > label { flex: 1 1 13rem; }
-input,select { max-width: 100%; min-height: 2.6rem; padding-inline: .5rem; color: inherit; background: var(--kg-panel); border: 1px solid var(--kg-border); border-radius: .4rem; }
+.kg-quick-search { display: grid; grid-template-columns: minmax(0,1fr) auto; }
+.kg-quick-search > label { grid-column: 1; }
+.kg-quick-search input { width: 100%; }
+.kg-quick-search > button { min-height: 2.75rem; }
+.kg-search-options { grid-column: 1 / -1; font-size: .9rem; }
+.kg-search-options > summary { cursor: pointer; padding-block: .25rem; }
+.kg-search-options > label { margin-block-start: .5rem; }
+[data-search-summary] { font-size: .9rem; margin-block: .5rem; }
+input,select { max-width: 100%; min-height: 2.6rem; padding-inline: .5rem; color: inherit; background: var(--kg-panel); border: 1px solid var(--kg-control-border); border-radius: .4rem; }
 select { width: min(26rem,100%); min-width: 0; }
 input[type=checkbox] { min-height: auto; }
 input[type=range] { width: 100%; padding-inline: 0; border: 0; accent-color: var(--kg-accent); }
@@ -99,19 +114,21 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,su
 .kg-warning { border-left-color: Highlight; }
 [hidden] { display: none !important; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-color-scheme=light]) { --kg-bg: #191d28; --kg-panel: #222735; --kg-ink: #e4e8f2; --kg-subtle: #a6b1c7; --kg-border: #3b4354; --kg-grid: #303848; --kg-edge: #91a0b8; --kg-accent: #b4a7ff; --kg-node-halo: #242a38; }
+  :root:not([data-color-scheme=light]):not([data-host-color-scheme=light]) { --kg-bg: #191d28; --kg-panel: #222735; --kg-ink: #e4e8f2; --kg-subtle: #a6b1c7; --kg-border: #3b4354; --kg-control-border: #8794ab; --kg-grid: #303848; --kg-edge: #91a0b8; --kg-accent: #b4a7ff; --kg-node-halo: #242a38; }
 }
 :root[data-color-scheme=light] { color-scheme: light; }
-:root[data-color-scheme=dark] { color-scheme: dark; --kg-bg: #191d28; --kg-panel: #222735; --kg-ink: #e4e8f2; --kg-subtle: #a6b1c7; --kg-border: #3b4354; --kg-grid: #303848; --kg-edge: #91a0b8; --kg-accent: #b4a7ff; --kg-node-halo: #242a38; }
+:root[data-color-scheme=auto][data-host-color-scheme=light] { color-scheme: light; }
+:root[data-color-scheme=dark],:root[data-color-scheme=auto][data-host-color-scheme=dark] { color-scheme: dark; --kg-bg: #191d28; --kg-panel: #222735; --kg-ink: #e4e8f2; --kg-subtle: #a6b1c7; --kg-border: #3b4354; --kg-control-border: #8794ab; --kg-grid: #303848; --kg-edge: #91a0b8; --kg-accent: #b4a7ff; --kg-node-halo: #242a38; }
 @media (max-width: 30rem) {
   main { padding-inline: .65rem; }
   .kg-diagram-section { padding: .65rem; }
-  .kg-diagram-toolbar button { flex: 1 1 7rem; }
+  .kg-diagram-toolbar { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .45rem; }
+  .kg-diagram-toolbar button { min-height: 2.75rem; font-size: .85rem; padding: .4rem; }
   form > label { flex-basis: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto !important; } }
 @media (forced-colors: active) {
-  :root,:root[data-color-scheme] { --kg-bg: Canvas; --kg-panel: Canvas; --kg-ink: CanvasText; --kg-subtle: CanvasText; --kg-border: CanvasText; --kg-accent: Highlight; }
+  :root,:root[data-color-scheme],:root[data-color-scheme][data-host-color-scheme] { --kg-bg: Canvas; --kg-panel: Canvas; --kg-ink: CanvasText; --kg-subtle: CanvasText; --kg-border: CanvasText; --kg-control-border: CanvasText; --kg-accent: Highlight; }
   .kg-surface { background-image: none; }
   .kg-edge,.kg-edge.kg-muted { stroke: CanvasText; opacity: 1; }
   .kg-node circle { fill: Canvas; stroke: CanvasText; }

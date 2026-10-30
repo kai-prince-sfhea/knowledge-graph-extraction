@@ -8,13 +8,15 @@ import { parseSchema, validateObjectType, validateProperties, validateRelationEn
 import { graphDefinition } from "./composition.ts";
 import { parseGraphViewOptions, parseQueryProfiles } from "./graph-view.ts";
 import { parseReadingOptions } from "./reading-route.ts";
-import { companionReference, compatibleCompanion, companionInputs } from "./companion-cache.ts";
+import { companionReference, compatibleCompanion, companionInputs, companionContract, reviewedCurrentCompanionPayloads } from "./companion-cache.ts";
+import { collectCompanionContextUnion } from './companion-review-contexts.mjs';
+import { createObservationSession } from './companion-review-collector.mjs';
 import { parseDeliveryOptions } from "./delivery.ts";
 import { parseMemberships, parseRelationMemberships } from "./memberships.ts";
 import { preparedResourcesValid } from './companion-resources.ts';
 export { publicRecord } from "./schema.ts";
 
-export const VERSION = "0.0.12";
+export const VERSION = "0.0.17";
 export const STATE = ".quarto/knowledge-graph";
 export const PUBLIC = "knowledge-graph";
 type RecordValue = Record<string, any>;
@@ -453,29 +455,49 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   const dependencies: RecordValue[] = [];
   const sourceDependencies: Record<string, string[]> = {};
   const dependencyClosures = new Map<string, Set<string>>();
+  // Private metadata provenance, captured during existing reads only. Context
+  // closures propagate through cached source/include/metadata visits too.
+  const dependencyMetadataClosures = new Map<string, Set<string>>();
+  const metadataContextClosures = new Map<string, Set<string>>();
+  const directoryContextClosures = new Map<string, Set<string>>();
+  const metadataContexts = new Map<string, {directory: string; metadata: RecordValue}>();
+  const sourceMetadataContexts = new Map<string, Set<string>>();
+  const globalMetadataContexts = new Set<string>();
+  const sourceReviewRefusals = new Set<string>();
+  const companionReviewReports: Record<string, RecordValue> = {};
   const unsafeDependencies = new Set<string>();
   const explicitDependencies = new Set<string>();
   let unsafeTransforms = false;
   const companionChecks = new Map<string, boolean>();
+  const companionContracts = new Map<string, {name: string; contract: 'historical' | 'current-v1'}>();
   const hashed = new Set<string>();
   const processed = new Set<string>();
   const active = new Set<string>();
   const checkedDirectories = new Set<string>();
   const checkedMetadata = new Set<string>();
   const activeMetadata = new Set<string>();
-  async function directoryMetadata(inputDirectory: string): Promise<void> {
+  function mergeContexts(target: Set<string>, values: Iterable<string>): void { for (const value of values) target.add(value); }
+  function contextDirectory(directory: string): string { return directory.replaceAll('\\', '/'); }
+  function rememberMetadata(metadata: RecordValue, directory: string, origin: string): string {
+    const id = `${contextDirectory(directory)}\n${origin}`;
+    if (!metadataContexts.has(id)) metadataContexts.set(id, {directory: contextDirectory(directory), metadata: semanticMetadata(metadata)});
+    return id;
+  }
+  async function directoryMetadata(inputDirectory: string): Promise<Set<string>> {
+    const result = new Set<string>();
     let directory = inputDirectory;
     while (true) {
       const interpret = directory !== "." || inputDirectory === ".";
       const context = `${directory}\n${interpret}`;
       if (!checkedDirectories.has(context)) {
         checkedDirectories.add(context);
+        directoryContextClosures.set(context, new Set<string>());
         let selected = false;
         for (const name of ["_metadata.yml", "_metadata.yaml"]) {
           const contextPath = contextualPath(name, directory);
           try {
             await Deno.stat(await confined(root, contextPath));
-            if (interpret && !selected) await metadataFile(contextPath, directory);
+            if (interpret && !selected) mergeContexts(directoryContextClosures.get(context)!, await metadataFile(contextPath, directory));
             else if (!hashed.has(contextPath)) {
               // Ignored suffixes/root contexts are conservatively fingerprinted
               // without interpreting YAML or following irrelevant resources.
@@ -487,11 +509,13 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
           } catch (error) { if (!(error instanceof Deno.errors.NotFound)) throw error; }
         }
       }
+      mergeContexts(result, directoryContextClosures.get(context) ?? []);
       if (directory === ".") break;
       const parent = dirname(directory);
       if (parent === directory) fail("cannot resolve a project-relative metadata context");
       directory = parent;
     }
+    return result;
   }
   function frontMatter(content: string): RecordValue {
     const normalized = content.replace(/^\uFEFF/, "");
@@ -535,7 +559,9 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
       await walk(reference.directory);
       files.sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
       const manifest = parse(await Deno.readTextFile(await confined(root, `${reference.directory}/_extension.yml`))) as RecordValue;
-      accepted = compatibleCompanion(reference.name, manifest?.version, await digest(canonical(files)));
+      const contract = companionContract(reference.name, manifest?.version, await digest(canonical(files)));
+      accepted = contract !== null;
+      if (contract) companionContracts.set(reference.directory, {name: reference.name, contract});
     } catch (error) {
       // Missing, linked or unrecognised payloads need a new actual observation.
       // Do not turn an optional cache optimisation into an activation failure.
@@ -544,23 +570,31 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     companionChecks.set(reference.directory, accepted);
     return accepted;
   }
-  async function metadataDependencies(metadata: RecordValue, mainDirectory: string): Promise<void> {
-    if (metadata['local-ai']?.['publish-assets'] === true && !await preparedResourcesValid(root,contextualPath(metadata['local-ai'].manifest ?? '/local-ai-assets/models.json',mainDirectory))) unsafeTransforms=true;
+  function currentCompanion(name: string): boolean { return [...companionContracts.values()].some(value => value.name === name && value.contract === 'current-v1'); }
+  async function filterDependencies(metadata: RecordValue): Promise<void> {
+    if (metadata.filters !== undefined) {
+      const filters = Array.isArray(metadata.filters) ? metadata.filters : [metadata.filters];
+      for (const filter of filters) if (!hasFilter([filter]) && !await companionTransform(filter)) unsafeTransforms = true;
+    }
+    if (metadata.format && typeof metadata.format === 'object' && !Array.isArray(metadata.format)) {
+      for (const value of Object.values(metadata.format)) if (value && typeof value === 'object' && !Array.isArray(value)) await filterDependencies(value as RecordValue);
+    }
+  }
+  async function metadataDependencies(metadata: RecordValue, mainDirectory: string, origin = 'metadata'): Promise<Set<string>> {
+    const result = new Set<string>([rememberMetadata(metadata, mainDirectory, origin)]);
+    await filterDependencies(metadata);
+    if (!currentCompanion('local-ai-websites') && metadata['local-ai']?.['publish-assets'] === true && !await preparedResourcesValid(root,contextualPath(metadata['local-ai'].manifest ?? '/local-ai-assets/models.json',mainDirectory))) unsafeTransforms=true;
     const extra = metadata["knowledge-graph"]?.dependencies;
     if (extra !== undefined) {
       for (const value of array(extra, "knowledge-graph.dependencies")) {
         for (const path of await dependency(contextualPath(value, mainDirectory))) explicitDependencies.add(path);
       }
     }
-    if (metadata.filters !== undefined) {
-      const filters = Array.isArray(metadata.filters) ? metadata.filters : [metadata.filters];
-      for (const filter of filters) if (!hasFilter([filter]) && !await companionTransform(filter)) unsafeTransforms = true;
-    }
     if (["reader", "writer", "template", "shortcodes"].some(key => metadata[key] !== undefined)
       || metadata.engine !== undefined && !["markdown", "none"].includes(metadata.engine)) unsafeTransforms = true;
     if (metadata.format && typeof metadata.format === "object" && !Array.isArray(metadata.format)) {
-      for (const value of Object.values(metadata.format)) {
-        if (value && typeof value === "object" && !Array.isArray(value)) await metadataDependencies(value as RecordValue, mainDirectory);
+      for (const [format, value] of Object.entries(metadata.format)) {
+        if (value && typeof value === "object" && !Array.isArray(value)) mergeContexts(result, await metadataDependencies(value as RecordValue, mainDirectory, `${origin}/format/${format}`));
       }
     }
     for (const key of ["bibliography", "csl"]) {
@@ -568,7 +602,12 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
       const resources = Array.isArray(metadata[key]) ? metadata[key] : [metadata[key]];
       for (const value of resources) await dependency(contextualPath(value, mainDirectory));
     }
-    for (const value of companionInputs(metadata)) {
+    // Preserve historical input behavior. Current reviewed namespaces use the
+    // context-union collector below rather than interpreting one raw map as
+    // effective metadata or turning an unused alternate into global failure.
+    const legacyMetadata = {...metadata};
+    for (const [name, namespace] of [['maths-knowledge-graph','maths-knowledge-graph'],['interactive-cv','interactive-cv'],['local-ai-websites','local-ai']]) if (currentCompanion(name)) delete legacyMetadata[namespace];
+    for (const value of companionInputs(legacyMetadata)) {
       const path = contextualPath(value, mainDirectory);
       try { await dependency(path); }
       catch (error) {
@@ -588,14 +627,16 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     for (const key of ["metadata-file", "metadata-files"]) {
       if (metadata[key] === undefined) continue;
       const resources = Array.isArray(metadata[key]) ? metadata[key] : [metadata[key]];
-      for (const value of resources) await metadataFile(contextualPath(value, mainDirectory), mainDirectory);
+      for (const value of resources) mergeContexts(result, await metadataFile(contextualPath(value, mainDirectory), mainDirectory));
     }
+    return result;
   }
-  async function metadataFile(path: string, mainDirectory: string): Promise<void> {
+  async function metadataFile(path: string, mainDirectory: string): Promise<Set<string>> {
     const context = `${mainDirectory}\n${path}`;
     if (activeMetadata.has(context)) fail("metadata dependency cycle detected; remove the cyclic metadata-files reference");
-    if (checkedMetadata.has(context)) return;
+    if (checkedMetadata.has(context)) return metadataContextClosures.get(context) ?? new Set<string>();
     activeMetadata.add(context);
+    metadataContextClosures.set(context, new Set<string>());
     let bytes: Uint8Array;
     try { bytes = await Deno.readFile(await confined(root, path)); }
     catch (error) {
@@ -608,7 +649,7 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
       }
       activeMetadata.delete(context);
       checkedMetadata.add(context);
-      return;
+      return metadataContextClosures.get(context)!;
     }
     const metadata = record(parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) ?? {}, "metadata file");
     const ignored = dependencies.find(entry => entry.path === path && entry.kind === "ignored-metadata");
@@ -621,9 +662,10 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
       hashed.add(path);
       dependencies.push({ path, hash: await digest(canonical(semanticMetadata(metadata))), kind: "metadata" });
     }
-    await metadataDependencies(metadata, mainDirectory);
+    mergeContexts(metadataContextClosures.get(context)!, await metadataDependencies(metadata, mainDirectory, `metadata-file:${path}`));
     activeMetadata.delete(context);
     checkedMetadata.add(context);
+    return metadataContextClosures.get(context)!;
   }
   async function dependency(path: string, include = false, mainDirectory = dirname(path)): Promise<Set<string>> {
     path = projectPath(path);
@@ -634,6 +676,8 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     if (processed.has(context)) return dependencyClosures.get(context)!;
     const closure = new Set<string>([path]);
     dependencyClosures.set(context, closure);
+    const metadataClosure = new Set<string>();
+    dependencyMetadataClosures.set(context, metadataClosure);
     active.add(context);
     let bytes: Uint8Array;
     try { bytes = await Deno.readFile(await confined(root, path)); }
@@ -649,31 +693,39 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
       if (/^\s*(?:`{3,}|~{3,})\s*\{[^}]+\}/m.test(content)
           || /\{\{<\s*(?!include\b)[A-Za-z]/.test(content)
           || /`(?:r\s+|\{(?:r|python|julia)\})/.test(content)) unsafeDependencies.add(path);
-      await directoryMetadata(mainDirectory);
+      mergeContexts(metadataClosure, await directoryMetadata(mainDirectory));
       if (extname(path).toLowerCase() === ".qmd" || include) {
         const metadata = frontMatter(content);
-        await metadataDependencies(metadata, mainDirectory);
+        mergeContexts(metadataClosure, await metadataDependencies(metadata, mainDirectory, `frontmatter:${path}`));
       }
       // Native includes are standalone shortcode lines, including those inside
       // source fences. Escaped/triple-brace literal examples do not match.
       // Nested include references resolve in the main document's directory:
       // https://quarto.org/docs/authoring/includes.html
       for (const match of content.matchAll(/^[ \t]*\{\{<[ \t]*include[ \t]+(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s>]+))[ \t]*>\}\}[ \t]*\r?$/gm)) {
-        for (const item of await dependency(contextualPath(match[1] ?? match[2] ?? match[3], mainDirectory), true, mainDirectory)) closure.add(item);
+        const included = contextualPath(match[1] ?? match[2] ?? match[3], mainDirectory);
+        for (const item of await dependency(included, true, mainDirectory)) closure.add(item);
+        mergeContexts(metadataClosure, dependencyMetadataClosures.get(`${mainDirectory}\n${included}`) ?? []);
       }
     }
     active.delete(context);
     processed.add(context);
     return closure;
   }
-  for (const path of producerSources) sourceDependencies[path] = [...await dependency(path)].sort();
+  // One root inspection already supplied effective project filters. Preflight
+  // them once; never launch per-page inspection to select current contracts.
+  await filterDependencies(config);
+  for (const path of producerSources) {
+    sourceDependencies[path] = [...await dependency(path)].sort();
+    sourceMetadataContexts.set(path, dependencyMetadataClosures.get(`${dirname(path)}\n${path}`) ?? new Set<string>());
+  }
   // Quarto identifies the root, activated profiles and project metadata-files
   // that actually contributed to its effective configuration.
   for (const value of inspection.files?.config ?? []) {
     const path = relativeInput(root, value);
-    await metadataFile(path, ".");
+    mergeContexts(globalMetadataContexts, await metadataFile(path, "."));
   }
-  await metadataDependencies(config, ".");
+  mergeContexts(globalMetadataContexts, await metadataDependencies(config, ".", 'effective-project-config'));
   // MK's reviewed reader probes these project-root catalogues in order when
   // declarations are omitted. Hash both existing files and absence: creating
   // a higher-priority file must invalidate an earlier default resolution.
@@ -689,9 +741,54 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   // Explicit inputs invalidate globally even if first classified as a source/include.
   for (const path of [...explicitDependencies].sort()) dependencies.push({ path: `explicit:${path}`, kind: "explicit-dependency",
     hash: dependencies.find(entry => entry.path === path)!.hash });
+  // A new session belongs to THIS loadProject only. Finalize calls loadProject
+  // again, so cached observations are never reused for commit/freshness checks.
+  const hasCurrentContracts = [...companionContracts.values()].some(value => value.contract === 'current-v1');
+  if (hasCurrentContracts && !unsafeTransforms) {
+    const byName = new Map<string, string[]>();
+    for (const [directory, value] of companionContracts) byName.set(value.name, [...(byName.get(value.name) ?? []), directory]);
+    // Multiple installations of one named transform have no single reviewed
+    // effective consumer context. Keep the original global refusal boundary.
+    if ([...byName.values()].some(directories => directories.length > 1)) unsafeTransforms = true;
+    else {
+      const observationSession = await createObservationSession(root);
+      const kgPrerequisites = {version:1, namespaces,
+        objects: objects.filter(item => item.eligible).flatMap(item => (item.graphIds ?? [item.graphId ?? 'website']).map((graphId: string) => ({id:item.id,graphId}))),
+        relations: relations.filter(item => item.eligible && item.type === 'requires').flatMap(item => (item.graphIds ?? [item.graphId ?? 'website']).map((graphId: string) => ({from:item.from,to:item.to,graphId,...(item.properties?.['prerequisite-group'] ? {group:item.properties['prerequisite-group']} : {})}))) };
+      for (const path of producerSources) {
+        try {
+          const contextIds = new Set([...globalMetadataContexts, ...(sourceMetadataContexts.get(path) ?? [])]);
+          const contexts = [...contextIds].map(id => metadataContexts.get(id)!);
+          const review = await collectCompanionContextUnion({root, sourcePath:path, contexts,
+            activeCompanions:[...byName.keys()], reviewed:reviewedCurrentCompanionPayloads,
+            parseYAML:parse, kgPrerequisites, mkgDirectory:byName.get('maths-knowledge-graph')?.[0], observationSession});
+          const reasons = review.reasons.map((item: RecordValue) => ({scope:'source',code:item.code,feature:item.feature}));
+          companionReviewReports[path] = {safe:review.safe, reasons, contexts:contexts.length};
+          if (!review.safe) sourceReviewRefusals.add(path);
+          for (const item of review.dependencies) {
+            if (item.kind === 'source' && dependencies.some(entry => entry.path === item.path && ['source','include'].includes(entry.kind))) {
+              if (dependencies.find(entry => entry.path === item.path)!.hash !== item.hash) fail('companion containing source changed during dependency observation');
+              continue;
+            }
+            const name = item.kind === 'companion-runtime' ? `companion/${item.path}` : `companion-review-byte:${item.path}`;
+            const existing = dependencies.find(entry => entry.path === name);
+            if (existing && existing.hash !== item.hash) fail('companion input changed during dependency observation');
+            if (!existing) dependencies.push({path:name,hash:item.hash,kind:item.kind === 'companion-runtime' ? 'companion-runtime' : 'companion-input-bytes'});
+          }
+          for (const item of [...review.trees, ...review.probes, ...review.derived]) {
+            const name = `companion-review:${path}:${item.kind}:${item.path}`;
+            dependencies.push({path:name,hash:item.hash,kind:'companion-observation'});
+          }
+        } catch (error) {
+          sourceReviewRefusals.add(path);
+          companionReviewReports[path] = {safe:false,reasons:[{scope:'source',code:'unsupported-companion-context',feature:'bounded-review'}]};
+        }
+      }
+    }
+  }
   const unsafeGlobal = unsafeTransforms || [...explicitDependencies].some(path => unsafeDependencies.has(path));
-  const cacheUnsafeSources = paths.filter(path => unsafeGlobal || sourceDependencies[path].some(item => unsafeDependencies.has(item)));
-  const producerCacheUnsafeSources = producerSources.filter(path => unsafeGlobal || sourceDependencies[path].some(item => unsafeDependencies.has(item)));
+  const cacheUnsafeSources = paths.filter(path => unsafeGlobal || sourceReviewRefusals.has(path) || sourceDependencies[path].some(item => unsafeDependencies.has(item)));
+  const producerCacheUnsafeSources = producerSources.filter(path => unsafeGlobal || sourceReviewRefusals.has(path) || sourceDependencies[path].some(item => unsafeDependencies.has(item)));
   const collections = await sourceCollections(root, declaration.collections, dependencies);
   function semanticMetadata(value: RecordValue): RecordValue {
     const result = structuredClone(value);
@@ -726,7 +823,7 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   if(new Set(sourceOriginPaths).size!==sourceOriginPaths.length||sourceOriginPaths.some(path=>!/[.](?:qmd|md)$/i.test(path)||!dependencies.some(item=>item.path===path&&['source','include'].includes(item.kind))))fail('source origins must be unique already-inventoried QMD/MD source or include paths');
   return { config, mode, ai, schema, schemaPath, schemaVersion: schema.version, schemaDigest,
     inputSources, producerSources, sources: paths.sort(), objects, relations, namespaces, graphDefinitions: [...graphDefinitions.values()],
-    sourceDependencies, cacheUnsafeSources, producerCacheUnsafeSources, collections, cacheEnabled: options.cache !== false, gitEnabled: options.git === true, navigation: options.navigation === true,
+    sourceDependencies, cacheUnsafeSources, producerCacheUnsafeSources, ...(hasCurrentContracts ? {companionReviewReports} : {}), collections, cacheEnabled: options.cache !== false, gitEnabled: options.git === true, navigation: options.navigation === true,
     authoringEnabled: options.authoring === true, viewOptions, queryProfiles, deliveryOptions, federationOptions, navigationLinks, searchFilter: options['search-filter'] !== false,
     exportOptions, packageOptions, readingOptions: parseReadingOptions(options.reading), sourceOriginPaths,
     protectedLiterals, privateTokens: protectedLiterals, dependencies,

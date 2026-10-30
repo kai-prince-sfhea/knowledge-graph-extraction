@@ -8,7 +8,8 @@ type Artifact = { path: string; cacheName: string; hash: string };
 type CacheRecord = { cacheVersion: number; manifest: Record<string, any>; manifestHash: string; artifacts: Artifact[]; capturedAt?: string };
 const pointer = `${STATE}/public/committed.json`;
 const hashPattern = /^[a-f0-9]{64}$/;
-const navigationAssets = ["query.js", "graph-view.js", "graph-view.css", "graph-force.js", "delivery.js", "reading-route.js", "graph-label-layout.js"];
+const navigationAssets = ["query.js", "graph-view.js", "graph-view.css", "graph-force.js", "delivery.js", "reading-route.js", "graph-label-layout.js", "graph-theme.js"];
+const reportAssets = ["graph-view.css", "graph-theme.js"];
 const exportFiles = ["dataset.jsonld", "objects.csv", "relations.csv", "public-schema.json"];
 const packageFiles = ["ro-crate-metadata.json", "reconstruction-manifest.json"];
 const captureDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
@@ -23,12 +24,18 @@ const artifactOrder = (a: Artifact, b: Artifact): number => a.path < b.path ? -1
 
 function manifestValue(value: unknown): Record<string, any> {
   const manifest = record(value, "cached publication manifest");
-  keys(manifest, ["contractVersion", "snapshotId", "status", "dependencyDigest", "graph", "index", "report", "navigation", "assets", "exports", "registry", "composition"], "cached publication manifest");
+  keys(manifest, ["contractVersion", "snapshotId", "status", "dependencyDigest", "graph", "index", "report", "navigation", "assets", "reportAssets", "exports", "registry", "composition"], "cached publication manifest");
   if (manifest.contractVersion !== 0 || typeof manifest.snapshotId !== "string" || !hashPattern.test(manifest.snapshotId)
     || typeof manifest.dependencyDigest !== "string" || !hashPattern.test(manifest.dependencyDigest)
     || !["complete", "incomplete"].includes(manifest.status)) fail("invalid cached publication manifest");
   for (const [field, filename] of [["graph", "graph.json"], ["index", "index.json"], ["report", "report.html"]]) {
     if (manifest[field] !== `generations/${manifest.snapshotId}/${filename}`) fail("cached manifest has an unsupported artifact mapping");
+  }
+  if (manifest.reportAssets !== undefined) {
+    const assets = record(manifest.reportAssets, "source report assets");
+    keys(assets, reportAssets, "source report assets");
+    if (Object.keys(assets).length !== reportAssets.length) fail("missing source report asset");
+    for (const name of reportAssets) if (assets[name] !== `generations/${manifest.snapshotId}/${name}`) fail("unsupported source report asset mapping");
   }
   if (manifest.navigation !== undefined || manifest.assets !== undefined) {
     if (manifest.navigation !== `generations/${manifest.snapshotId}/navigation.html`) fail("unsupported navigation mapping");
@@ -53,7 +60,7 @@ function manifestValue(value: unknown): Record<string, any> {
     const files = record(manifest.composition, "composed graph artifacts");
     if (files["registry.json"] !== manifest.registry) fail("missing composed graph registry");
     for (const [name, value] of Object.entries(files)) {
-      if (!/^(?:registry\.json|source-origins\.json|query-provider\.js|site-search(?:-index\.json|\.js|\.css)|reading-route\.js|(?:(?:graphs\/[a-z][a-z0-9-]{0,63}\/)?(?:delivery(?:-index\.json|\.json|\.js)|topics\/[a-f0-9]{64}\.json|query\.js|reading-route\.js))|graphs\/[a-z][a-z0-9-]{0,63}\/(?:graph\.json|index\.json|report\.html|navigation\.html|mapping\.json|graph-view\.js|graph-view\.css|graph-force\.js|graph-label-layout\.js))$/.test(name)
+      if (!/^(?:registry\.json|source-origins\.json|query-provider\.js|site-search(?:-index\.json|\.js|\.css)|reading-route\.js|(?:(?:graphs\/[a-z][a-z0-9-]{0,63}\/)?(?:delivery(?:-index\.json|\.json|\.js)|topics\/[a-f0-9]{64}\.json|query\.js|reading-route\.js))|graphs\/[a-z][a-z0-9-]{0,63}\/(?:graph\.json|index\.json|report\.html|navigation\.html|mapping\.json|graph-view\.js|graph-view\.css|graph-force\.js|graph-label-layout\.js|graph-theme\.js))$/.test(name)
           || value !== `generations/${manifest.snapshotId}/${name}`) fail("unsupported composed graph artifact mapping");
     }
   }
@@ -68,12 +75,20 @@ function mappings(manifest: Record<string, any>): Omit<Artifact, "hash">[] {
     { path: "report.html", cacheName: "report-alias.html" },
     ...(manifest.navigation ? [{ path: manifest.navigation, cacheName: "navigation.html" },
       ...navigationAssets.filter(name => Object.hasOwn(manifest.assets, name)).map(name => ({ path: manifest.assets[name], cacheName: name }))] : []),
+    ...(manifest.reportAssets ? reportAssets.map(name => ({ path: manifest.reportAssets[name], cacheName: `report-${name}` })) : []),
     ...(manifest.exports ? [...exportFiles,...packageFiles].filter(name=>Object.hasOwn(manifest.exports,name)).map(name => ({ path: manifest.exports[name], cacheName: name })) : []),
     ...(manifest.composition ? Object.entries(manifest.composition).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, path]) => ({ path: path as string, cacheName: `composition-${name.replaceAll("/", "--")}` })) : []),
   ];
 }
 
 function validateNavigationModule(path: string, bytes: Uint8Array, manifest: Record<string, any>): void {
+  if (/(?:^|\/)report\.html$/.test(path)) {
+    const html = new TextDecoder().decode(bytes);
+    for (const match of html.matchAll(/\b(?:href|src)\s*=\s*["']([^"']*(?:graph-view\.css|graph-theme\.js))["']/g)) {
+      const url = new URL(match[1], `https://publication.invalid/${path}`);
+      if (url.origin !== 'https://publication.invalid' || !mappings(manifest).some(mapping => mapping.path === url.pathname.slice(1))) fail("source report references an undeclared stylesheet/theme asset; no graph restored");
+    }
+  }
   if (!/(?:^|\/)graph-view\.js$/.test(path)) return;
   const importsForce = /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']\.\/graph-force\.js["']/.test(new TextDecoder().decode(bytes));
   if (importsForce && !mappings(manifest).some(mapping => mapping.path === path.replace(/graph-view\.js$/, "graph-force.js"))) {
@@ -82,6 +97,7 @@ function validateNavigationModule(path: string, bytes: Uint8Array, manifest: Rec
   if (/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']\.\/graph-label-layout\.js["']/.test(new TextDecoder().decode(bytes)) && !mappings(manifest).some(mapping => mapping.path === path.replace(/graph-view\.js$/, "graph-label-layout.js"))) fail("navigator imports undeclared graph-label-layout.js; no graph restored");
   if (/from\s*["']\.\/delivery\.js["']/.test(new TextDecoder().decode(bytes)) && !mappings(manifest).some(mapping => mapping.path === path.replace(/graph-view\.js$/, "delivery.js"))) fail("navigator imports undeclared delivery.js; no graph restored");
   if (/from\s*["']\.\/reading-route\.js["']/.test(new TextDecoder().decode(bytes)) && !mappings(manifest).some(mapping => mapping.path === path.replace(/graph-view\.js$/, "reading-route.js"))) fail("navigator imports undeclared reading-route.js; no graph restored");
+  if (/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["']\.\/graph-theme\.js["']/.test(new TextDecoder().decode(bytes)) && !mappings(manifest).some(mapping => mapping.path === path.replace(/graph-view\.js$/, "graph-theme.js"))) fail("navigator imports undeclared graph-theme.js; no graph restored");
 }
 
 async function validate(value: unknown): Promise<CacheRecord> {

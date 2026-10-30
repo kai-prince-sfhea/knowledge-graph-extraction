@@ -25,6 +25,7 @@ export function historicalReceipt(value:unknown):Value{
     {path:v.manifest.report,cacheName:'report.html'},{path:'report.html',cacheName:'report-alias.html'}];
   if(v.manifest.navigation!==undefined){expected.push({path:v.manifest.navigation,cacheName:'navigation.html'});if(!v.manifest.assets||typeof v.manifest.assets!=='object'||Array.isArray(v.manifest.assets))fail('navigation asset mappings are missing');
     for(const [name,path]of Object.entries(v.manifest.assets))expected.push({path:path as string,cacheName:name});}
+  if(v.manifest.reportAssets!==undefined){const assets=v.manifest.reportAssets,names=['graph-view.css','graph-theme.js'];if(!assets||typeof assets!=='object'||Array.isArray(assets)||Object.keys(assets).length!==names.length||names.some(name=>assets[name]!==base+name))fail('source report asset mappings are missing or invalid');for(const name of names)expected.push({path:assets[name],cacheName:'report-'+name});}
   for(const [name,path]of Object.entries(v.manifest.exports??{}))expected.push({path:path as string,cacheName:name});
   for(const [name,path]of Object.entries(v.manifest.composition??{}))expected.push({path:path as string,cacheName:'composition-'+name.replaceAll('/','--')});
   const selected=new Set(v.artifacts.map((a:Value)=>a.path+'\n'+a.cacheName));

@@ -5,6 +5,7 @@ import { recordLabel, createSemanticLabels, search, query, prerequisites, shorte
   acceptRoute, beginDetour, returnFromDetour, advanceRoute, setKnowledge, restoreNavigationState, navigationStorageKey } from './query.js';
 import { createForceSimulation } from './graph-force.js';
 import { layoutGraphLabels } from './graph-label-layout.js';
+import './graph-theme.js';
 import { openDelivery } from './delivery.js';
 import { validateReadingRouteConfig, createReadingRouteStore, startReadingRoute, restoreReadingRoute, resumeReadingNavigator } from './reading-route.js';
 
@@ -138,17 +139,25 @@ function searchList(capture = false) {
       returnPosition: { x: window.scrollX, y: window.scrollY }, returnFocusKey: document.activeElement?.dataset?.focusKey ?? null, returnViewport: { ...viewport } });
   }
   state.viewQuery = nextQuery;
+  const domainSummary = find('[data-domain-summary]');
+  if (domainSummary) domainSummary.textContent = nextQuery.scope ? `Domain: ${nextQuery.scope}` : 'Filter by domain';
   lastSearch = delivery ? delivery.search({ text: form.elements.text.value, scope: scope(), limit: 200 }) : search(graph, { text: form.elements.text.value, scope: scope(), limit: 200 });
   visible = lastSearch.answer?.map(item => item.object) ?? [];
-  find('[data-search-summary]').textContent = `${visible.length} observed matches shown; ${lastSearch.status}, ${lastSearch.exhaustive ? discovery?.status === 'complete' || graph.status === 'complete' ? 'exhaustive within this source scope' : 'all matches within the observed records' : 'bounded candidates'}. ${delivery ? 'Discovery covers the declared public index; record details and relations load on request.' : graph.status !== 'complete' ? 'Missing records remain unknown because source coverage is incomplete.' : ''}`;
-  find('[data-list-note]').textContent = 'Select and open sources through this list. Matching words keep their separate identifiers and declared domains.';
-  const list = find('[data-results]'); list.replaceChildren();
+  const completeScope = (discovery?.status ?? graph.status) === 'complete';
+  find('[data-search-summary]').textContent = `${visible.length} matching records shown. ${lastSearch.exhaustive && completeScope ? 'All matches in this scope.' : 'More records may be available.'}`;
+  find('[data-list-note]').textContent = `${visible.length} observed matches shown; ${lastSearch.status}, ${lastSearch.exhaustive ? completeScope ? 'exhaustive within this source scope' : 'all matches within the observed records' : 'bounded candidates'}. ${delivery ? 'Discovery covers the declared public index; record details and relations load on request. ' : graph.status !== 'complete' ? 'Missing records remain unknown because source coverage is incomplete. ' : ''}Select and open sources through this list. Matching words keep their separate identifiers and declared domains.`;
+  const list = find('[data-results]'), focusedResult = list.contains(document.activeElement) ? document.activeElement : null;
+  const resultFocusKey = focusedResult?.dataset?.focusKey; list.replaceChildren();
   for (const object of visible) {
     const item = make('li'), select = button(semanticLabel(object), () => selectNode(object.id));
     select.dataset.focusKey = `select:${object.id}`; select.setAttribute('aria-pressed', String(state.selectedId === object.id));
     item.append(select, make('span', ` Type: ${object.type}`), make('br'), make('code', object.id)); list.append(item);
   }
   if (!visible.length) list.append(make('li', graph.status === 'complete' ? 'No matching public records in the declared source scope.' : 'No matching records were observed; incomplete coverage does not prove absence.'));
+  if (focusedResult && !focusedResult.isConnected) {
+    const replacement = resultFocusKey ? [...list.querySelectorAll('[data-focus-key]')].find(element => element.dataset.focusKey === resultFocusKey) : null;
+    (replacement ?? find('[data-search]').elements.text).focus({ preventScroll: true });
+  }
   draw();
 }
 function sources(id, container) {
@@ -299,6 +308,7 @@ function detail() {
   target.append(list);
 }
 async function selectNode(id) {
+  const origin = document.activeElement;
   if (delivery) {
     const row = discovery.objects.find(object => object.id === id); if (!row) return;
     try { await loadDetails(row.scope); } catch (error) { status(`Details unavailable: ${error.message}. Missing prerequisites remain unknown.`); return; }
@@ -311,11 +321,12 @@ async function selectNode(id) {
     catch (error) { status(`Inspection refused: ${error.message}. Return from an exploration step to continue.`); return; }
   }
   else state.selectedId = id;
+  const returnFocus = document.activeElement === origin;
   detail(); routeView(); draw();
   showStatus(); save();
-  find('#kg-detail-heading').focus();
+  if (returnFocus) find('#kg-detail-heading').focus();
 }
-function showStatus() { status(`${discovery?.status ?? graph.status} source coverage.${delivery ? ` ${graph.status === 'complete' ? 'All' : 'Partial'} graph details loaded.` : ''} ${state.selectedId ? `Selected ${semanticLabel(state.selectedId)}. ` : ''}${state.detours.length ? `Exploration depth ${state.detours.length}; the accepted route remains paused.` : state.route ? 'An accepted route is selected.' : 'No route has been accepted.'}`); }
+function showStatus() { status(`Source coverage: ${discovery?.status ?? graph.status}.${delivery ? delivery.status().reason ? ' Some details are unavailable; missing details remain unknown.' : ` ${graph.status === 'complete' ? 'All' : 'Partial'} details loaded.` : ''}${state.selectedId ? ` Selected ${semanticLabel(state.selectedId)}.` : ''}${state.detours.length ? ` Exploring; the accepted route is paused (${state.detours.length} steps).` : state.route ? ' Route selected.' : ''}`); }
 function candidateView() {
   const container = find('[data-candidate]'); container.replaceChildren();
   if (!candidate?.answer) { container.append(make('p', candidate?.status === 'unknown' ? `Route existence is unknown (${candidate.reason}).` : `No candidate found (${candidate?.reason ?? 'not computed'}).`));
@@ -382,8 +393,8 @@ function layoutStatus() {
   find('[data-simulation-toggle]').textContent = layoutPaused || settled ? 'Resume layout' : 'Pause layout';
   find('[data-simulation-state]').dataset.state = layoutPaused ? 'paused' : settled ? 'settled' : 'running';
   find('[data-simulation-state]').textContent = layoutPaused
-    ? motionPreference.matches ? 'Layout paused. Reduced motion is preferred; resume only if you want animation.' : 'Layout paused. You can still select, pan, zoom and arrange nodes.'
-    : settled ? 'Layout settled. Drag a node or resume to let the forces arrange it again.' : 'Layout running. Links attract connected nodes; the fast multipole calculation repels nearby and distant nodes.';
+    ? motionPreference.matches ? 'Layout paused for reduced motion.' : 'Layout paused. Select, pan or zoom to explore.'
+    : settled ? 'Layout settled. Drag a node to rearrange it.' : 'Layout running. Pause for a still view.';
 }
 function animate(now) {
   frame = null;
@@ -438,7 +449,7 @@ function prepareDiagram() {
     const group = svgElement('g', { 'data-node': object.id, class: 'kg-node' });
     const hit = svgElement('rect', { class: 'kg-node-hit' });
     const circle = svgElement('circle', { 'vector-effect': 'non-scaling-stroke' });
-    const text = svgElement('text', { class: 'kg-node-label', 'font-size': 12, 'vector-effect': 'non-scaling-stroke' });
+    const text = svgElement('text', { class: 'kg-node-label', 'font-size': 13, 'vector-effect': 'non-scaling-stroke' });
     const title = svgElement('title'); title.textContent = `${semanticLabel(object)}; type ${object.type}`;
     group.append(hit, circle, text, title); scene.append(group);
     nodeElements.set(object.id, { object, group, hit, circle, text, color: types.indexOf(object.type) % 12, radius: 7 + Math.min(6, Math.sqrt(degrees.get(object.id) ?? 0) * 1.5), fontState: null, measurements: new Map() });
@@ -471,11 +482,11 @@ function paintDiagram() {
     const r = radius / Math.sqrt(viewport.scale); circle.setAttribute('r', r);
     const hitSize = Math.max(28 / viewport.scale, r * 2 + 6 / viewport.scale);
     for (const [name, value] of Object.entries({ x: -hitSize / 2, y: -hitSize / 2, width: hitSize, height: hitSize })) hit.setAttribute(name, value);
-    text.setAttribute('font-size', 12 / viewport.scale); text.setAttribute('text-anchor', 'start');
+    text.setAttribute('font-size', 13 / viewport.scale); text.setAttribute('text-anchor', 'start');
     const fontState = selected || focused ? 'emphasised' : 'ordinary';
     if (entry.fontState !== fontState) {
       const computed = getComputedStyle(text);
-      entry.font = `${computed.fontStyle} ${computed.fontWeight} 12px ${computed.fontFamily}`;
+      entry.font = `${computed.fontStyle} ${computed.fontWeight} 13px ${computed.fontFamily}`;
       entry.nativeMeasure = computed.letterSpacing !== 'normal' && computed.letterSpacing !== '0px';
       entry.fontState = fontState; entry.measurements.clear();
     }

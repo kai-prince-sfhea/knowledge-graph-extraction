@@ -134,8 +134,8 @@ async function publicGraph(graph: Mapping, manifest: Mapping, sources: string[])
   if (graph.publication !== undefined && !Object.keys(publication).length) fail('empty publication metadata is unsupported');
   if (publication.navigation !== undefined && publication.navigation !== true) fail('unsupported public navigation flag');
   if ((publication.navigation === true) !== (manifest.navigation !== undefined)) fail('navigation metadata and manifest disagree');
-  if (publication.navigation === true) {
-    if (typeof publication.runtimeDigest !== 'string' || !HASH.test(publication.runtimeDigest)) fail('navigation needs its runtime digest');
+  if (publication.navigation === true || manifest.reportAssets !== undefined) {
+    if (typeof publication.runtimeDigest !== 'string' || !HASH.test(publication.runtimeDigest)) fail('navigation or source reports need their runtime digest');
   } else if (publication.runtimeDigest !== undefined) fail('navigation runtime digest has no navigation publication');
   if ((publication.exports !== undefined) !== (manifest.exports !== undefined)) fail('export metadata and manifest disagree');
   if (publication.exports !== undefined) exportMetadata(publication.exports);
@@ -182,7 +182,7 @@ export async function validateBaseline(value: unknown, context?: BaselineContext
   const { hash, ...body } = bundle;
   if (await baselineHash(body) !== hash) fail('bundle integrity mismatch');
   const manifest = mapping(bundle.manifest, 'manifest');
-  keys(manifest, ['contractVersion', 'snapshotId', 'status', 'dependencyDigest', 'graph', 'index', 'report', 'navigation', 'assets', 'exports', 'registry', 'composition'], 'manifest');
+  keys(manifest, ['contractVersion', 'snapshotId', 'status', 'dependencyDigest', 'graph', 'index', 'report', 'navigation', 'assets', 'reportAssets', 'exports', 'registry', 'composition'], 'manifest');
   if (manifest.contractVersion !== 0 || manifest.status !== 'complete' || typeof manifest.snapshotId !== 'string' || !HASH.test(manifest.snapshotId)
       || typeof manifest.dependencyDigest !== 'string' || !HASH.test(manifest.dependencyDigest)) fail('a complete version-0 publication is required');
   const prefix = 'generations/' + manifest.snapshotId + '/';
@@ -190,7 +190,7 @@ export async function validateBaseline(value: unknown, context?: BaselineContext
     if (manifest.registry !== prefix + 'registry.json') fail('unsupported registry mapping');
     const files = mapping(manifest.composition, 'composition');
     if (files['registry.json'] !== manifest.registry) fail('missing graph registry');
-    for (const [name, value] of Object.entries(files)) if (!/^(?:registry\.json|source-origins\.json|reading-route\.js|query-provider\.js|site-search(?:-index\.json|\.js|\.css)|(?:(?:graphs\/[a-z][a-z0-9-]{0,63}\/)?(?:delivery(?:-index\.json|\.json|\.js)|topics\/[a-f0-9]{64}\.json|query\.js|reading-route\.js))|graphs\/[a-z][a-z0-9-]{0,63}\/(?:graph\.json|index\.json|mapping\.json|report\.html|navigation\.html|graph-view\.js|graph-view\.css|graph-force\.js|graph-label-layout\.js))$/.test(name) || value !== prefix + name) fail('unsupported composed graph mapping');
+    for (const [name, value] of Object.entries(files)) if (!/^(?:registry\.json|source-origins\.json|reading-route\.js|query-provider\.js|site-search(?:-index\.json|\.js|\.css)|(?:(?:graphs\/[a-z][a-z0-9-]{0,63}\/)?(?:delivery(?:-index\.json|\.json|\.js)|topics\/[a-f0-9]{64}\.json|query\.js|reading-route\.js))|graphs\/[a-z][a-z0-9-]{0,63}\/(?:graph\.json|index\.json|mapping\.json|report\.html|navigation\.html|graph-view\.js|graph-view\.css|graph-force\.js|graph-label-layout\.js|graph-theme\.js))$/.test(name) || value !== prefix + name) fail('unsupported composed graph mapping');
   }
   for (const name of ['graph', 'index', 'report']) if (manifest[name] !== prefix + name + (name === 'report' ? '.html' : '.json')) fail('unsupported publication mapping');
   function assets(field: string, names: string[]): void {
@@ -199,8 +199,9 @@ export async function validateBaseline(value: unknown, context?: BaselineContext
   }
   if (manifest.navigation !== undefined || manifest.assets !== undefined) {
     if (manifest.navigation !== prefix + 'navigation.html') fail('unsupported navigation mapping');
-    assets('assets', ['query.js', 'graph-view.js', 'graph-view.css', ...['graph-force.js','delivery.js','reading-route.js','graph-label-layout.js'].filter(name=>Object.hasOwn(mapping(manifest.assets, 'navigation assets'),name))]);
+    assets('assets', ['query.js', 'graph-view.js', 'graph-view.css', ...['graph-force.js','delivery.js','reading-route.js','graph-label-layout.js','graph-theme.js'].filter(name=>Object.hasOwn(mapping(manifest.assets, 'navigation assets'),name))]);
   }
+  if (manifest.reportAssets !== undefined) assets('reportAssets', ['graph-view.css','graph-theme.js']);
   // The paired package metadata is optional; a portable baseline must bind the
   // exact same public package policy and complete file mapping as the renderer.
   const packaged = bundle.graph?.publication?.package !== undefined;

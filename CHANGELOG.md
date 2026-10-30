@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.0.17 — graph and source-report readability — 30 October 2026
+
+Local candidate. Wrap long source-report identifiers and provenance with shared
+light/dark typography, including reports published without navigation. Publish
+the stylesheet in the same immutable generation and bind report runtime bytes
+even when the website navigator is disabled. Keep search prominent, disclose
+verbose loading counts and diagram guidance, and preserve visible coverage and
+error feedback. Auto-themed same-origin embeds follow their surrounding Quarto
+theme; explicit light/dark configuration and cross-origin OS fallback remain.
+Strengthen control borders, modestly enlarge measured labels, and wrap replaced
+producer graph islands in contextual regions. Force calculations, drag release,
+source records and reader-state contracts are unchanged. Pure Node regressions
+pass; native rendering, browser and human accessibility checks remain separate.
+
+Keep keyboard focus on the matching public search result when delayed search
+replaces the list, or return it to the search input when that result is absent.
+Delayed record selection moves focus to its heading only while the initiating
+element still owns focus. Forgetting a source-page reading route returns removed
+control focus to its retained heading; focus outside the panel stays in place.
+The three paths and missing-result fallback were checked separately in a real
+browser before applying the exact files. This does not establish general
+assistive-technology or accessibility acceptance.
+
+Also restore finite observation reuse for separately reviewed exact current
+companion payloads: AM/MKG 0.0.10, CV 0.0.11, GW/LA 0.0.13 and ACO
+1.1.0-dev.6. Preserve historical pairs and unknown-transform refusal. Track a
+bounded conservative union of existing metadata/source/include contexts,
+literal inputs, provider closures, absence probes and prepared activity trees;
+unsupported source-local forms require fresh AST observation. Fresh sessions
+recheck inputs at finalization without per-page inspect subprocesses or model
+byte reads. Source and pure tests remain separate from native acceptance.
+The final current pairs also bind the separately reviewed GW revision 8 and
+MKG/LA/CV focus-only closures without changing their native input contracts.
+
 ## 0.0.16 — contextual inspection guidance — 28 October 2026
 
 Local development candidate; no push or release. Give the optional semantic

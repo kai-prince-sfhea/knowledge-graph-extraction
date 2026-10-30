@@ -6,7 +6,7 @@ import { htmlIds } from "./html.ts";
 import { commitPublicationCache, stagePublication } from "./publication.ts";
 import { CacheEntry, commitExtractionCache, readExtractionCache, reusable, semanticObservation, sourceKeys } from "./cache.ts";
 import { commitGitBaseline } from "./git.ts";
-import { buildGraphView, graphViewRuntimeIdentity } from "./graph-view.ts";
+import { buildGraphView, graphViewRuntimeIdentity, graphReportAssets } from "./graph-view.ts";
 import { buildPackageExports } from "./package-export.ts";
 import { authoringObservations } from "./authoring.ts";
 import { importedBaseline, requireImportedBaselineRender } from "./baseline-state.ts";
@@ -185,12 +185,13 @@ const capabilities = {
   ...(nativeSearchDigest ? {siteSearch: {version: 1, nativeDigest: nativeSearchDigest}} : {}),
   ...(project.federationOptions ? {federation:{...project.federationOptions,links:project.admittedNavigationLinks,unobserved:project.unobservedNavigationLinks,
     memberships:project.objects.filter((item:any)=>item.eligible&&item.graphIds?.length>1).map((item:any)=>({id:item.id,graphs:item.graphIds}))}} : {}) };
-const runtimeDigest = project.navigation || hasComposedGraphs || capabilities ? await digest(canonical(graphViewRuntimeIdentity(project.dependencies.filter((item: any) => item.kind === "extractor"), project.viewOptions, project.queryProfiles))) : undefined;
+// Source reports always publish runtime assets, including navigation-disabled sites.
+const runtimeDigest = await digest(canonical(graphViewRuntimeIdentity(project.dependencies.filter((item: any) => item.kind === "extractor"), project.viewOptions, project.queryProfiles)));
 const compositionDigest = await digest(canonical(compositionIdentity(declaredGraphs, producer, runtimeDigest, capabilities)));
 const content = { contractVersion: 0, extractorVersion: VERSION, status: complete ? "complete" : "incomplete",
   ...(project.schemaPath ? { schema: { version: project.schemaVersion, digest: project.schemaDigest } } : {}),
-  publication: { compositionDigest,
-    ...(project.navigation ? { navigation: true, runtimeDigest } : {}),
+  publication: { compositionDigest, runtimeDigest,
+    ...(project.navigation ? { navigation: true } : {}),
     ...(project.exportOptions ? { exports: project.exportOptions } : {}),
     ...(project.packageOptions ? { package: project.packageOptions } : {}) },
   scope: { sources: project.sources, renderedSources: [...observations.keys()].sort(), skippedSources },
@@ -233,6 +234,10 @@ if (project.protectedLiterals.length) {
 const report = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Knowledge graph extraction report</title></head><body><main><h1>Knowledge graph extraction report</h1><p>Snapshot: <code>${snapshotId}</code></p><p>Coverage: <strong>${graph.status}</strong>, ${observations.size}/${project.sources.length} declared pages rendered. ${complete ? "Explicit author declarations; no automatic word matching or inference." : "Partial render: missing records are unknown, not absent. Run a full project render for complete coverage."}</p><p>Unspecified/private fields are excluded. Content is author-declared, not independently verified.</p><h2>Objects</h2><ul>${index.objects.map((item: any) => `<li><strong>${escapeHtml(Object.values(item.labels)[0])}</strong> (${escapeHtml(item.scope)}, ${escapeHtml(item.type)}) <code>${escapeHtml(item.id)}</code><ul>${item.destinations.map((destination: string) => `<li><a href="../${escapeHtml(destination)}">${escapeHtml(destination)}</a></li>`).join("")}</ul></li>`).join("")}</ul><h2>Relations</h2><ul>${relations.map((item: any) => `<li><code>${escapeHtml(item.type)}</code>: ${escapeHtml(item.from)} → ${escapeHtml(item.to)} (${escapeHtml(item.scope)})</li>`).join("")}</ul><p><a href="manifest.json">Machine-readable manifest</a></p></main></body></html>\n`;
 const publicDirectory = join(output, PUBLIC);
 let reportContent = report.replace("declared pages rendered", "declared pages validated")
+  .replace('<html lang="en">', `<html lang="en" data-color-scheme="${project.viewOptions['color-scheme']}">`)
+  .replace('</head>', `<link rel="stylesheet" href="generations/${snapshotId}/graph-view.css"></head>`)
+  .replace('</head>', `<script type="module" src="generations/${snapshotId}/graph-theme.js"></script></head>`)
+  .replace('<body>', '<body class="kg-source-report">')
   .replace("</main>", `${project.navigation ? `<p><a href="generations/${snapshotId}/navigation.html">Explore the graph</a></p>` : ""}</main>`);
 protectedText(canonical(graph));
 protectedText(canonical(index));
@@ -282,12 +287,13 @@ for(const entry of [...composition.registry.graphs,...(composition.registry.fede
 composition.files['registry.json']=`${canonical(composition.registry)}\n`;
 reportContent = reportContent.replace("</main>", `<section><h2>Separate public graphs</h2><ul>${composition.registry.graphs.map((entry: any) => `<li>${entry.navigation ? `<a href="${escapeHtml(entry.navigation)}">${escapeHtml(entry.label)}</a>` : escapeHtml(entry.label)} (${escapeHtml(entry.status)})</li>`).join("")}</ul></section></main>`);
 if(composition.registry.federation) {const entry=composition.registry.federation;reportContent=reportContent.replace('</main>',`<p><a href="${escapeHtml(entry.navigation || entry.report)}">${escapeHtml(entry.label)}</a> (${escapeHtml(entry.status)}).</p></main>`);}
-const additional: Record<string, string> = { ...(view ? { "navigation.html": view.html, ...view.assets } : {}), ...exported.files, ...composition.files };
+const additional: Record<string, string> = { ...await graphReportAssets(), ...(view ? { "navigation.html": view.html, ...view.assets } : {}), ...exported.files, ...composition.files };
 for (const value of Object.values(additional)) protectedText(value);
 const generation = await confined(root, outputPath(run.outputDir, `${PUBLIC}/generations/${snapshotId}`));
 await Deno.mkdir(generation, { recursive: true });
 const immutableReport = reportContent.replaceAll('href="../', 'href="../../../').replace('href="manifest.json"', 'href="../../manifest.json"')
-  .replaceAll(`href="generations/${snapshotId}/`, 'href="');
+  .replaceAll(`href="generations/${snapshotId}/`, 'href="')
+  .replaceAll(`src="generations/${snapshotId}/`, 'src="');
 const reportPath = join(generation, "report.html");
 try { if (await Deno.readTextFile(reportPath) !== immutableReport) fail("immutable generation report conflict"); }
 catch (error) {
@@ -313,6 +319,7 @@ for (const [name, value] of Object.entries(additional)) {
 const manifest = { contractVersion: 0, snapshotId, status: graph.status, dependencyDigest: project.dependencyDigest,
   graph: `generations/${snapshotId}/graph.json`, index: `generations/${snapshotId}/index.json`, report: `generations/${snapshotId}/report.html`,
   ...(view ? { navigation: `generations/${snapshotId}/navigation.html`, assets: Object.fromEntries(Object.keys(view.assets).map(name => [name, `generations/${snapshotId}/${name}`])) } : {}),
+  ...(!view ? { reportAssets: Object.fromEntries(Object.keys(await graphReportAssets()).map(name => [name, `generations/${snapshotId}/${name}`])) } : {}),
   ...(Object.keys(exported.files).length ? { exports: Object.fromEntries(Object.keys(exported.files).map(name => [name, `generations/${snapshotId}/${name}`])) } : {}),
   registry: `generations/${snapshotId}/registry.json`, composition: Object.fromEntries(Object.keys(composition.files).map(name => [name, `generations/${snapshotId}/${name}`])) };
 // Explicit native observations only; an output-dir of '.' must never turn an
