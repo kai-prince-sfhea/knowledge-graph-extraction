@@ -183,6 +183,20 @@ function propertySchema(rule: PropertyRule): Mapping {
     ...(rule.minimum !== undefined ? { minimum: rule.minimum } : {}),
     ...(rule.maximum !== undefined ? { maximum: rule.maximum } : {}) };
 }
+function packagePolicySchema(): Mapping {
+  const rights = { oneOf: [
+    { type: "object", additionalProperties: false, required: ["status"], properties: { status: { const: "unknown" } } },
+    { type: "object", additionalProperties: false, required: ["status", "license"], properties: {
+      status: { const: "declared" }, license: { $ref: "#/$defs/httpIdentifier" }, attribution: { type: "string", minLength: 1 },
+    } },
+  ] };
+  return { type: "object", additionalProperties: false, required: ["version", "description", "datePublished", "componentRights"], properties: {
+    version: { const: 0 }, description: { type: "string", minLength: 1 },
+    datePublished: { type: "string", format: "date", pattern: "^\\d{4}-\\d\\d-\\d\\d$" },
+    license: { $ref: "#/$defs/httpIdentifier" }, metadataLicense: { $ref: "#/$defs/httpIdentifier" },
+    componentRights: { type: "object", additionalProperties: false, properties: Object.fromEntries(FILES.map(name => [name, rights])) },
+  } };
+}
 function recordSchemas(schema: SchemaContract, kind: "object" | "relation"): Mapping[] {
   const types = kind === "object" ? schema.objectTypes : schema.relationTypes;
   return Object.keys(types).sort().map(type => {
@@ -220,8 +234,10 @@ function publicSchema(schema: SchemaContract, options: ExportOptions): Mapping {
       contractVersion: { const: 0 }, extractorVersion: { type: "string", minLength: 1 },
       schema: { type: "object", additionalProperties: false, required: ["version", "digest"],
         properties: { version: { const: 0 }, digest: { type: "string", pattern: "^[a-f0-9]{64}$" } } },
-      publication: { type: "object", additionalProperties: false, properties: {
+      publication: { type: "object", additionalProperties: false, dependentRequired: { package: ["exports"] }, properties: {
         navigation: { type: "boolean" }, runtimeDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        compositionDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        package: packagePolicySchema(),
         exports: { type: "object", additionalProperties: false, required: ["id", "title", "creators"], properties: {
           id: { $ref: "#/$defs/httpIdentifier" }, title: { type: "string", minLength: 1 },
           creators: { type: "array", items: { type: "string", minLength: 1 }, uniqueItems: true },

@@ -1,4 +1,5 @@
 // Data-only portable expected baseline. This is not an HTML/extraction cache.
+import { PACKAGE_METADATA_FILES, PUBLIC_EXPORT_FILES, validatePackageOptions, validatePackageExportPolicy } from './package-export.ts';
 type Mapping = Record<string, any>;
 const HASH = /^[a-f0-9]{64}$/;
 export const BASELINE_KIND = 'knowledge-graph-frozen-baseline';
@@ -128,7 +129,8 @@ async function publicGraph(graph: Mapping, manifest: Mapping, sources: string[])
     if (schema.version !== 0 || typeof schema.digest !== 'string' || !HASH.test(schema.digest)) fail('unsupported public schema metadata');
   }
   const publication = graph.publication === undefined ? {} : mapping(graph.publication, 'public publication metadata');
-  keys(publication, ['navigation', 'runtimeDigest', 'exports'], 'public publication metadata');
+  keys(publication, ['navigation', 'runtimeDigest', 'exports', 'package', 'compositionDigest'], 'public publication metadata');
+  if (publication.compositionDigest !== undefined && (typeof publication.compositionDigest !== 'string' || !HASH.test(publication.compositionDigest))) fail('unsupported graph composition digest');
   if (graph.publication !== undefined && !Object.keys(publication).length) fail('empty publication metadata is unsupported');
   if (publication.navigation !== undefined && publication.navigation !== true) fail('unsupported public navigation flag');
   if ((publication.navigation === true) !== (manifest.navigation !== undefined)) fail('navigation metadata and manifest disagree');
@@ -137,6 +139,11 @@ async function publicGraph(graph: Mapping, manifest: Mapping, sources: string[])
   } else if (publication.runtimeDigest !== undefined) fail('navigation runtime digest has no navigation publication');
   if ((publication.exports !== undefined) !== (manifest.exports !== undefined)) fail('export metadata and manifest disagree');
   if (publication.exports !== undefined) exportMetadata(publication.exports);
+  if (publication.package !== undefined) {
+    if (publication.exports === undefined) fail('package metadata requires public export metadata');
+    if (canonicalBaseline(validatePackageOptions(publication.package)) !== canonicalBaseline(publication.package)) fail('noncanonical package metadata');
+    validatePackageExportPolicy(publication.package, publication.exports);
+  }
   const objects = new Map<string, Mapping>(), ids = new Set<string>();
   for (const raw of graph.objects) {
     const object = record(raw, 'object', coverage);
@@ -175,10 +182,16 @@ export async function validateBaseline(value: unknown, context?: BaselineContext
   const { hash, ...body } = bundle;
   if (await baselineHash(body) !== hash) fail('bundle integrity mismatch');
   const manifest = mapping(bundle.manifest, 'manifest');
-  keys(manifest, ['contractVersion', 'snapshotId', 'status', 'dependencyDigest', 'graph', 'index', 'report', 'navigation', 'assets', 'exports'], 'manifest');
+  keys(manifest, ['contractVersion', 'snapshotId', 'status', 'dependencyDigest', 'graph', 'index', 'report', 'navigation', 'assets', 'exports', 'registry', 'composition'], 'manifest');
   if (manifest.contractVersion !== 0 || manifest.status !== 'complete' || typeof manifest.snapshotId !== 'string' || !HASH.test(manifest.snapshotId)
       || typeof manifest.dependencyDigest !== 'string' || !HASH.test(manifest.dependencyDigest)) fail('a complete version-0 publication is required');
   const prefix = 'generations/' + manifest.snapshotId + '/';
+  if (manifest.registry !== undefined || manifest.composition !== undefined) {
+    if (manifest.registry !== prefix + 'registry.json') fail('unsupported registry mapping');
+    const files = mapping(manifest.composition, 'composition');
+    if (files['registry.json'] !== manifest.registry) fail('missing graph registry');
+    for (const [name, value] of Object.entries(files)) if (!/^(?:registry\.json|source-origins\.json|reading-route\.js|query-provider\.js|site-search(?:-index\.json|\.js|\.css)|(?:(?:graphs\/[a-z][a-z0-9-]{0,63}\/)?(?:delivery(?:-index\.json|\.json|\.js)|topics\/[a-f0-9]{64}\.json|query\.js|reading-route\.js))|graphs\/[a-z][a-z0-9-]{0,63}\/(?:graph\.json|index\.json|mapping\.json|report\.html|navigation\.html|graph-view\.js|graph-view\.css|graph-force\.js|graph-label-layout\.js))$/.test(name) || value !== prefix + name) fail('unsupported composed graph mapping');
+  }
   for (const name of ['graph', 'index', 'report']) if (manifest[name] !== prefix + name + (name === 'report' ? '.html' : '.json')) fail('unsupported publication mapping');
   function assets(field: string, names: string[]): void {
     const value = mapping(manifest[field], field);
@@ -186,9 +199,12 @@ export async function validateBaseline(value: unknown, context?: BaselineContext
   }
   if (manifest.navigation !== undefined || manifest.assets !== undefined) {
     if (manifest.navigation !== prefix + 'navigation.html') fail('unsupported navigation mapping');
-    assets('assets', ['query.js', 'graph-view.js', 'graph-view.css']);
+    assets('assets', ['query.js', 'graph-view.js', 'graph-view.css', ...['graph-force.js','delivery.js','reading-route.js','graph-label-layout.js'].filter(name=>Object.hasOwn(mapping(manifest.assets, 'navigation assets'),name))]);
   }
-  if (manifest.exports !== undefined) assets('exports', ['dataset.jsonld', 'objects.csv', 'relations.csv', 'public-schema.json']);
+  // The paired package metadata is optional; a portable baseline must bind the
+  // exact same public package policy and complete file mapping as the renderer.
+  const packaged = bundle.graph?.publication?.package !== undefined;
+  if (manifest.exports !== undefined) assets('exports', [...PUBLIC_EXPORT_FILES, ...(packaged ? PACKAGE_METADATA_FILES : [])]);
   const graph = mapping(bundle.graph, 'public graph');
   keys(graph, ['contractVersion', 'extractorVersion', 'status', 'schema', 'publication', 'scope', 'objects', 'relations', 'occurrences', 'snapshotId'], 'public graph');
   const { snapshotId, ...content } = graph;
@@ -208,4 +224,21 @@ export async function validateBaseline(value: unknown, context?: BaselineContext
 export async function makeBaseline(manifest: Mapping, graph: Mapping, context?: BaselineContext): Promise<Mapping> {
   const body = { bundleVersion: 0, kind: BASELINE_KIND, manifest, graph };
   return await validateBaseline({ ...body, hash: await baselineHash(body) }, context);
+}
+
+/** Compare reproducible project policy now, retaining a modern composition
+ * commitment as an explicitly pending expectation. A portable bundle excludes
+ * native producer observations, so only a fresh full frozen render can recreate
+ * their exact commitment. Never remove that digest from the graph or snapshot. */
+export function compareBaselinePublication(actualValue: unknown, expectedValue: unknown): { composition: 'absent' | 'pending-fresh-full-frozen-render'; expectedCompositionDigest?: string } {
+  const actual = actualValue == null ? {} : mapping(actualValue, 'public publication metadata');
+  const expected = expectedValue == null ? {} : mapping(expectedValue, 'current publication policy');
+  keys(actual, ['navigation', 'runtimeDigest', 'exports', 'package', 'compositionDigest'], 'public publication metadata');
+  keys(expected, ['navigation', 'runtimeDigest', 'exports', 'package'], 'current publication policy');
+  const policy: Mapping = {};
+  for (const field of ['navigation', 'runtimeDigest', 'exports', 'package']) if (Object.hasOwn(actual, field)) policy[field] = actual[field];
+  if (canonicalBaseline(policy) !== canonicalBaseline(expected)) fail('publication policy differs from current configuration');
+  if (actual.compositionDigest === undefined) return { composition: 'absent' };
+  if (typeof actual.compositionDigest !== 'string' || !HASH.test(actual.compositionDigest)) fail('unsupported graph composition digest');
+  return { composition: 'pending-fresh-full-frozen-render', expectedCompositionDigest: actual.compositionDigest };
 }

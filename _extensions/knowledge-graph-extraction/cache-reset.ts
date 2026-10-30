@@ -2,7 +2,7 @@
 import { fail, STATE } from "./core.ts";
 import { privatePath } from "./private-path.ts";
 
-const paths = [`${STATE}/extraction/committed.json`, `${STATE}/run.json`];
+const paths = [`${STATE}/extraction/committed.json`, `${STATE}/producers/committed.json`, `${STATE}/run.json`];
 
 export async function resetExtractionCache(root: string, dryRun = false): Promise<Record<string, unknown>> {
   root = await Deno.realPath(root);

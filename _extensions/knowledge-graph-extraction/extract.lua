@@ -247,8 +247,23 @@ local function observe(doc)
     if component == ".." then filesystem_root = pandoc.path.directory(filesystem_root)
     elseif component ~= "." then fail("unexpected project offset outside the document ancestry") end
   end
-  local run = read_run(filesystem_root, disabled)
-  if run == nil then return doc end
+  local run = read_run(filesystem_root, true)
+  if run == nil then
+    if disabled then return doc end
+    -- A document namespace can replace (rather than deep-merge) the project's
+    -- disabled mapping. Consult native effective project context only on this
+    -- exceptional missing-run path; ordinary renders need no extra inspection.
+    local inspected, bytes = pcall(pandoc.pipe, quarto.config.cli_path(),
+      { "inspect", filesystem_root }, "")
+    if inspected then
+      local decoded, project = pcall(quarto.json.decode, bytes)
+      if decoded and type(project) == "table" and type(project.config) == "table"
+          and type(project.config["knowledge-graph"]) == "table"
+          and project.config["knowledge-graph"].enabled == false then return doc end
+    end
+    fail("no prepared run manifest; use normal quarto render or quarto preview " ..
+      "with the extension's automatic project hooks")
+  end
   local source = declared_source(run, quarto.doc.input_file, filesystem_root)
   if source == nil then return doc end
   if disabled then

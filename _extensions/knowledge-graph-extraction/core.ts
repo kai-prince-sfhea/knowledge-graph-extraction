@@ -3,10 +3,18 @@ import { dirname, extname, fromFileUrl, isAbsolute, join, relative, resolve } fr
 import { parseAIConfig } from "./ai-config.ts";
 import { sourceCollections } from "./collections.ts";
 import { parseExportOptions } from "./exports.ts";
+import { parsePackageOptions, validatePackageExportPolicy } from "./package-export.ts";
 import { parseSchema, validateObjectType, validateProperties, validateRelationEndpoints, validateWeight } from "./schema.ts";
+import { graphDefinition } from "./composition.ts";
+import { parseGraphViewOptions, parseQueryProfiles } from "./graph-view.ts";
+import { parseReadingOptions } from "./reading-route.ts";
+import { companionReference, compatibleCompanion, companionInputs } from "./companion-cache.ts";
+import { parseDeliveryOptions } from "./delivery.ts";
+import { parseMemberships, parseRelationMemberships } from "./memberships.ts";
+import { preparedResourcesValid } from './companion-resources.ts';
 export { publicRecord } from "./schema.ts";
 
-export const VERSION = "0.0.6";
+export const VERSION = "0.0.12";
 export const STATE = ".quarto/knowledge-graph";
 export const PUBLIC = "knowledge-graph";
 type RecordValue = Record<string, any>;
@@ -289,7 +297,24 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   const inspection = inspected ?? await inspectProject(root);
   const config = inspection.config;
   const options = record(config["knowledge-graph"] ?? {}, "knowledge-graph configuration");
-  keys(options, ["declarations", "schema", "mode", "enabled", "protected-literals", "ai", "cache", "git", "navigation", "exports", "dependencies", "authoring"], "knowledge-graph configuration");
+  keys(options, ["declarations", "schema", "mode", "enabled", "protected-literals", "ai", "cache", "git", "navigation", "view", "exports", "package", "dependencies", "authoring", "delivery", "search-filter", "query-profiles", "federation", "reading", "source-origins"], "knowledge-graph configuration");
+  const exportOptions = parseExportOptions(options.exports), packageOptions = parsePackageOptions(options.package);
+  validatePackageExportPolicy(packageOptions, exportOptions);
+  let federationOptions: RecordValue | null = null;
+  if (options.federation !== undefined && options.federation !== false) {
+    const value = record(options.federation, 'knowledge-graph.federation');
+    keys(value, ['graphs', 'label'], 'knowledge-graph.federation');
+    const graphs = array(value.graphs, 'federation.graphs');
+    if (!graphs.length || graphs.length > 64 || new Set(graphs).size !== graphs.length
+      || graphs.some(id => typeof id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(id) || ['federated','constructor','prototype'].includes(id))) fail('federation requires distinct explicit graph ids');
+    const label = text(value.label ?? 'Connected public graphs', 'federation label');
+    if (label.length > 128) fail('federation label is too long');
+    federationOptions = {graphs: [...graphs].sort(), label};
+  }
+  const deliveryOptions = parseDeliveryOptions(options.delivery);
+  const queryProfiles = parseQueryProfiles(options['query-profiles']);
+  if (options['search-filter'] !== undefined && typeof options['search-filter'] !== 'boolean') fail('knowledge-graph.search-filter must be boolean');
+  const viewOptions = parseGraphViewOptions(options.view);
   if (options.authoring !== undefined && typeof options.authoring !== "boolean") fail("knowledge-graph.authoring must be boolean");
   for (const name of ["cache", "git", "navigation"]) {
     if (options[name] !== undefined && typeof options[name] !== "boolean") fail(`knowledge-graph.${name} must be boolean`);
@@ -306,8 +331,15 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   const mode = Deno.env.get("KG_MODE") ?? options.mode ?? "update";
   if (!["update", "frozen"].includes(mode)) fail("mode must be update or frozen");
   const declarationPath = projectPath(options.declarations ?? "knowledge.yml");
-  const declaration = record(parse(await Deno.readTextFile(await confined(root, declarationPath))), "declarations");
-  keys(declaration, ["version", "namespaces", "sources", "collections", "objects", "relations"], "declarations");
+  let declaration;
+  try { declaration = record(parse(await Deno.readTextFile(await confined(root, declarationPath))), "declarations"); }
+  catch (error) {
+    // Domain producers (for example Interactive CV) need no empty hand-written
+    // knowledge.yml. An explicitly named missing declaration remains an error.
+    if (!(error instanceof Deno.errors.NotFound) || options.declarations !== undefined) throw error;
+    declaration = { version: 0, namespaces: {}, objects: [], relations: [] };
+  }
+  keys(declaration, ["version", "namespaces", "sources", "collections", "objects", "relations", "graphs", "navigation-links"], "declarations");
   if (declaration.version !== 0) fail("only declaration version 0 is supported");
   const namespaces = record(declaration.namespaces, "namespaces");
   for (const [prefix, base] of Object.entries(namespaces)) {
@@ -315,6 +347,9 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     identifier(base, {});
   }
   const inputSources = inspection.inputSources as string[];
+  // Producer filters can apply outside the narrowed extraction source list.
+  const producerSources = inputSources.filter(path => extname(path).toLowerCase() === ".qmd").sort();
+  const nativeSourceSet = new Set(producerSources);
   const activeSources: string[] = inspection.activeInputSources ?? await activeInputSources(root, inspection);
   const paths: string[] = declaration.sources === undefined ? activeSources : array(declaration.sources, "sources").map((value) => {
     const entry = record(value, "source");
@@ -327,10 +362,17 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   if (paths.some((path) => !inputSources.includes(path))) fail("a selected source is outside Quarto's current render inventory; check project.render and the active profile");
   if (paths.some((path) => !activeSources.includes(path))) fail("a selected source has no knowledge-graph-extraction filter; activate the filter for that page or remove it from declarations.sources");
   const sourceSet = new Set(paths);
+  const graphDefinitions = new Map<string, any>([["website", graphDefinition({ id: "website", label: "Website", navigation: options.navigation === true })]]);
+  for (const [id, definition] of Object.entries(record(declaration.graphs ?? {}, "graphs"))) {
+    if (id === 'federated') fail('federated is reserved for the opt-in connected view');
+    if (id === "website") fail("the website graph is configured through knowledge-graph.navigation; use a separate id for another graph");
+    graphDefinitions.set(id, graphDefinition(definition, id));
+  }
   const ids = new Set<string>();
   const objects = array(declaration.objects, "objects").map((value) => {
     const item = record(value, "object");
-    keys(item, ["id", "type", "scope", "labels", "aliases", "review", "public", "source", "occurrences", "properties"], "object");
+    keys(item, ["id", "type", "scope", "labels", "aliases", "review", "public", "source", "occurrences", "properties", "graph", "graphs"], "object");
+    const membership = parseMemberships(item, new Set(graphDefinitions.keys()));
     const id = identifier(item.id, namespaces);
     if (ids.has(id)) fail("duplicate semantic id");
     ids.add(id);
@@ -361,18 +403,19 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     // to list additional reuses; an explicit matching canonical entry is kept.
     if (!occurrences.some((entry) => entry.path === origin.path && entry.anchor === origin.anchor)) occurrences.unshift(origin);
     return { id, type, scope: text(item.scope, "scope"), labels, ...(aliases ? { aliases } : {}), review,
-      origin: "author-declared", source: origin, occurrences, eligible: item.public === true,
+      origin: "author-declared", source: origin, occurrences, eligible: item.public === true, ...membership,
       ...(Object.keys(properties).length ? { properties } : {}) };
   });
   const objectMap = new Map(objects.map((item) => [item.id, item]));
   const relations = array(declaration.relations, "relations").map((value) => {
     const item = record(value, "relation");
-    keys(item, ["id", "type", "from", "to", "scope", "review", "public", "source", "properties", "weight"], "relation");
+    keys(item, ["id", "type", "from", "to", "scope", "review", "public", "source", "properties", "weight", "graph", "graphs"], "relation");
     const id = identifier(item.id, namespaces);
     if (ids.has(id)) fail("duplicate semantic/relation id");
     ids.add(id);
     const from = identifier(item.from, namespaces), to = identifier(item.to, namespaces);
     if (!objectMap.has(from) || !objectMap.has(to)) fail("relation has an unknown endpoint");
+    const membership = parseRelationMemberships(item, objectMap.get(from)!, objectMap.get(to)!, new Set(graphDefinitions.keys()));
     const type = validateRelationEndpoints(schema, item.type, objectMap.get(from)!.type, objectMap.get(to)!.type);
     const properties = validateProperties(schema, "relation", type, item.properties);
     const weight = item.weight === undefined ? undefined : validateWeight(item.weight);
@@ -381,8 +424,31 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     if (item.public !== undefined && typeof item.public !== "boolean") fail("public eligibility must be boolean");
     if (item.public === true && (!objectMap.get(from)!.eligible || !objectMap.get(to)!.eligible)) fail("public relation cannot expose a private endpoint");
     return { id, type, from, to, scope: text(item.scope, "scope"), review,
-      origin: "author-declared", source: source(item.source, sourceSet), eligible: item.public === true,
+      origin: "author-declared", source: source(item.source, sourceSet), eligible: item.public === true, ...membership,
       ...(Object.keys(properties).length ? { properties } : {}), ...(weight === undefined ? {} : { weight }) };
+  });
+  const linkIds = new Set<string>();
+  const navigationLinks = array(declaration['navigation-links'] ?? [], 'navigation-links').map(value => {
+    const item = record(value, 'navigation link');
+    keys(item, ['id','from','to','type','weight','source','public','properties'], 'navigation link');
+    const id = identifier(item.id, namespaces);
+    if (linkIds.has(id) || ids.has(id)) fail('duplicate navigation link id');
+    linkIds.add(id);
+    const endpoint = (value: unknown) => {
+      const entry = record(value, 'navigation link endpoint'); keys(entry, ['graph','id'], 'navigation link endpoint');
+      if (typeof entry.graph !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(entry.graph) || ['federated','constructor','prototype'].includes(entry.graph)) fail('invalid endpoint graph');
+      const raw = text(entry.id, 'navigation endpoint id');
+      const id = raw.startsWith('urn:') && /^urn:[a-z0-9][a-z0-9-]{0,31}:[^\s]+$/i.test(raw) ? raw : identifier(raw, namespaces);
+      if (id.length > 8192) fail('navigation endpoint id is too long');
+      return {graph:entry.graph,id};
+    };
+    if (item.public !== undefined && typeof item.public !== 'boolean') fail('navigation link public must be boolean');
+    if (item.type !== undefined && !['navigation-link','requires'].includes(item.type)) fail('navigation link type requires navigation-link or requires');
+    const properties = record(item.properties ?? {}, 'navigation link properties');
+    keys(properties, ['prerequisite-group'], 'navigation link properties');
+    if (properties['prerequisite-group'] !== undefined) text(properties['prerequisite-group'], 'prerequisite group');
+    return {id,from:endpoint(item.from),to:endpoint(item.to),type:item.type ?? 'navigation-link',weight:validateWeight(item.weight ?? 1),
+      source:source(item.source,sourceSet),eligible:item.public === true,...(Object.keys(properties).length?{properties}:{})};
   });
   const dependencies: RecordValue[] = [];
   const sourceDependencies: Record<string, string[]> = {};
@@ -390,6 +456,7 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   const unsafeDependencies = new Set<string>();
   const explicitDependencies = new Set<string>();
   let unsafeTransforms = false;
+  const companionChecks = new Map<string, boolean>();
   const hashed = new Set<string>();
   const processed = new Set<string>();
   const active = new Set<string>();
@@ -443,7 +510,42 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     if (/^[A-Za-z][A-Za-z\d+.-]*:/.test(path) && !isAbsolute(path)) fail("remote dependency paths are unsupported; use a project-local resource");
     return projectPath(relative(root, isAbsolute(path) ? path : resolve(root, mainDirectory, path)).replaceAll("\\", "/"));
   }
+  async function companionTransform(filter: unknown): Promise<boolean> {
+    if (filter === 'quarto') return true;
+    const reference = companionReference(filter);
+    if (!reference) return false;
+    if (companionChecks.has(reference.directory)) return companionChecks.get(reference.directory)!;
+    const files: {path: string; hash: string}[] = [];
+    let total = 0;
+    async function walk(directory: string, prefix = ''): Promise<void> {
+      for await (const entry of Deno.readDir(await confined(root, directory))) {
+        if (entry.isSymlink || files.length > 256) throw new Error('unsupported companion payload');
+        const path = `${directory}/${entry.name}`, name = `${prefix}${entry.name}`;
+        if (entry.isDirectory) await walk(path, `${name}/`);
+        else if (entry.isFile) {
+          const bytes = await Deno.readFile(await confined(root, path)); total += bytes.length;
+          if (total > 8 * 1024 * 1024) throw new Error('unsupported companion payload');
+          const hash = await digest(bytes); files.push({path: name, hash});
+          dependencies.push({path: `companion/${reference.directory}/${name}`, hash, kind: 'companion-runtime'});
+        } else throw new Error('unsupported companion payload');
+      }
+    }
+    let accepted = false;
+    try {
+      await walk(reference.directory);
+      files.sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+      const manifest = parse(await Deno.readTextFile(await confined(root, `${reference.directory}/_extension.yml`))) as RecordValue;
+      accepted = compatibleCompanion(reference.name, manifest?.version, await digest(canonical(files)));
+    } catch (error) {
+      // Missing, linked or unrecognised payloads need a new actual observation.
+      // Do not turn an optional cache optimisation into an activation failure.
+      if (!(error instanceof Deno.errors.NotFound) && !(error instanceof Error)) throw error;
+    }
+    companionChecks.set(reference.directory, accepted);
+    return accepted;
+  }
   async function metadataDependencies(metadata: RecordValue, mainDirectory: string): Promise<void> {
+    if (metadata['local-ai']?.['publish-assets'] === true && !await preparedResourcesValid(root,contextualPath(metadata['local-ai'].manifest ?? '/local-ai-assets/models.json',mainDirectory))) unsafeTransforms=true;
     const extra = metadata["knowledge-graph"]?.dependencies;
     if (extra !== undefined) {
       for (const value of array(extra, "knowledge-graph.dependencies")) {
@@ -452,7 +554,7 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     }
     if (metadata.filters !== undefined) {
       const filters = Array.isArray(metadata.filters) ? metadata.filters : [metadata.filters];
-      if (filters.some(filter => !hasFilter([filter]))) unsafeTransforms = true;
+      for (const filter of filters) if (!hasFilter([filter]) && !await companionTransform(filter)) unsafeTransforms = true;
     }
     if (["reader", "writer", "template", "shortcodes"].some(key => metadata[key] !== undefined)
       || metadata.engine !== undefined && !["markdown", "none"].includes(metadata.engine)) unsafeTransforms = true;
@@ -465,6 +567,15 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
       if (metadata[key] === undefined) continue;
       const resources = Array.isArray(metadata[key]) ? metadata[key] : [metadata[key]];
       for (const value of resources) await dependency(contextualPath(value, mainDirectory));
+    }
+    for (const value of companionInputs(metadata)) {
+      const path = contextualPath(value, mainDirectory);
+      try { await dependency(path); }
+      catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+        unsafeTransforms = true;
+        if (!hashed.has(path)) { hashed.add(path); dependencies.push({path, kind: 'missing-companion-input', hash: await digest('absent-companion-input')}); }
+      }
     }
     for (const key of ["include-in-header", "include-before-body", "include-after-body"]) {
       if (metadata[key] === undefined) continue;
@@ -524,10 +635,12 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     const closure = new Set<string>([path]);
     dependencyClosures.set(context, closure);
     active.add(context);
-    const bytes = await Deno.readFile(await confined(root, path));
+    let bytes: Uint8Array;
+    try { bytes = await Deno.readFile(await confined(root, path)); }
+    catch (error) { active.delete(context); dependencyClosures.delete(context); throw error; }
     if (!hashed.has(path)) {
       hashed.add(path);
-      dependencies.push({ path, hash: await digest(bytes), kind: sourceSet.has(path) ? "source" : include ? "include" : "resource" });
+      dependencies.push({ path, hash: await digest(bytes), kind: nativeSourceSet.has(path) ? "source" : include ? "include" : "resource" });
     }
     if (extname(path).toLowerCase() === ".qmd" || include) {
       const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -553,7 +666,7 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     processed.add(context);
     return closure;
   }
-  for (const path of paths) sourceDependencies[path] = [...await dependency(path)].sort();
+  for (const path of producerSources) sourceDependencies[path] = [...await dependency(path)].sort();
   // Quarto identifies the root, activated profiles and project metadata-files
   // that actually contributed to its effective configuration.
   for (const value of inspection.files?.config ?? []) {
@@ -561,11 +674,24 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
     await metadataFile(path, ".");
   }
   await metadataDependencies(config, ".");
+  // MK's reviewed reader probes these project-root catalogues in order when
+  // declarations are omitted. Hash both existing files and absence: creating
+  // a higher-priority file must invalidate an earlier default resolution.
+  if ([...companionChecks].some(([path,accepted])=>accepted && path.endsWith('/maths-knowledge-graph'))) {
+    for (const path of ['knowledge.yml','knowledge.yaml','knowledge.json']) {
+      try { await dependency(path); }
+      catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+        if (!hashed.has(path)) { hashed.add(path); dependencies.push({path,kind:'missing-companion-probe',hash:await digest('absent-default-catalogue')}); }
+      }
+    }
+  }
   // Explicit inputs invalidate globally even if first classified as a source/include.
   for (const path of [...explicitDependencies].sort()) dependencies.push({ path: `explicit:${path}`, kind: "explicit-dependency",
     hash: dependencies.find(entry => entry.path === path)!.hash });
   const unsafeGlobal = unsafeTransforms || [...explicitDependencies].some(path => unsafeDependencies.has(path));
   const cacheUnsafeSources = paths.filter(path => unsafeGlobal || sourceDependencies[path].some(item => unsafeDependencies.has(item)));
+  const producerCacheUnsafeSources = producerSources.filter(path => unsafeGlobal || sourceDependencies[path].some(item => unsafeDependencies.has(item)));
   const collections = await sourceCollections(root, declaration.collections, dependencies);
   function semanticMetadata(value: RecordValue): RecordValue {
     const result = structuredClone(value);
@@ -578,7 +704,8 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   // already in the closure; inspecting every document would add a Quarto
   // subprocess per page without adding an untracked source of configuration.
   dependencies.push({ path: "quarto-runtime", hash: await digest(canonical(inspection.quarto ?? {})), kind: "runtime" });
-  dependencies.push({ path: declarationPath, hash: await digest(await Deno.readFile(await confined(root, declarationPath))), kind: "declarations" });
+  try { dependencies.push({ path: declarationPath, hash: await digest(await Deno.readFile(await confined(root, declarationPath))), kind: "declarations" }); }
+  catch (error) { if (!(error instanceof Deno.errors.NotFound) || options.declarations !== undefined) throw error; }
   if (schemaPath) dependencies.push({ path: schemaPath, hash: await digest(await Deno.readFile(await confined(root, schemaPath))), kind: "schema" });
   dependencies.push({ path: "effective-project-config", hash: await digest(canonical(semanticMetadata(config))), kind: "effective-root-config" });
   const extensionRoot = dirname(fromFileUrl(import.meta.url));
@@ -593,11 +720,15 @@ export async function loadProject(root: string, inspected?: RecordValue): Promis
   }
   await extensionDependencies(extensionRoot);
   dependencies.sort((a, b) => a.path === b.path ? 0 : a.path < b.path ? -1 : 1);
+  const originInput=options['source-origins']??[];
+  if(!Array.isArray(originInput)||originInput.length>512||originInput.some(value=>typeof value!=='string'))fail('knowledge-graph.source-origins requires a bounded list of public original QMD/MD paths');
+  const sourceOriginPaths=originInput.map(projectPath);
+  if(new Set(sourceOriginPaths).size!==sourceOriginPaths.length||sourceOriginPaths.some(path=>!/[.](?:qmd|md)$/i.test(path)||!dependencies.some(item=>item.path===path&&['source','include'].includes(item.kind))))fail('source origins must be unique already-inventoried QMD/MD source or include paths');
   return { config, mode, ai, schema, schemaPath, schemaVersion: schema.version, schemaDigest,
-    inputSources, sources: paths.sort(), objects, relations,
-    sourceDependencies, cacheUnsafeSources, collections, cacheEnabled: options.cache !== false, gitEnabled: options.git === true, navigation: options.navigation === true,
-    authoringEnabled: options.authoring === true,
-    exportOptions: parseExportOptions(options.exports),
+    inputSources, producerSources, sources: paths.sort(), objects, relations, namespaces, graphDefinitions: [...graphDefinitions.values()],
+    sourceDependencies, cacheUnsafeSources, producerCacheUnsafeSources, collections, cacheEnabled: options.cache !== false, gitEnabled: options.git === true, navigation: options.navigation === true,
+    authoringEnabled: options.authoring === true, viewOptions, queryProfiles, deliveryOptions, federationOptions, navigationLinks, searchFilter: options['search-filter'] !== false,
+    exportOptions, packageOptions, readingOptions: parseReadingOptions(options.reading), sourceOriginPaths,
     protectedLiterals, privateTokens: protectedLiterals, dependencies,
     dependencyDigest: await digest(canonical(dependencies)) };
 }

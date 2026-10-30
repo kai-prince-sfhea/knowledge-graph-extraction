@@ -1,0 +1,271 @@
+---
+title: "Knowledge Graph Extraction tutorial"
+format:
+  html:
+    toc: true
+lang: en
+---
+
+This tutorial uses the supplied two-page Quarto project in `examples/minimal`.
+Its material is fictional. You will render ordinary pages, inspect a graph of
+explicit public declarations, change a label and optionally explore the diagram.
+You need QMD/YAML authoring and normal Quarto commands, not Node, npm or an
+author-written JavaScript file.
+
+This tutorial describes the local 0.0.16 development candidate. The README
+distinguishes current checks from earlier regression and native/browser evidence
+on Windows with Quarto 1.11.5 pre-release. Use its support boundaries when
+evaluating another version or environment.
+
+You can render this `example.qmd` as a readable instruction page. **Rendering
+this instruction page does not run graph extraction.** Extraction is a
+project-level workflow: the exercise below runs inside the existing minimal
+project with its `_quarto.yml`, `knowledge.yml` and native source pages.
+
+## 1. Open the supplied project and install
+
+Start in this repository's root folder. Keep the distributed `examples/minimal`
+files together; the declarations refer to their current filenames and anchors.
+The local-source installation selects the matching local candidate:
+
+```powershell
+cd examples/minimal
+quarto add ../.. --no-prompt
+```
+
+The sample `_quarto.yml` already selects the unqualified
+`knowledge-graph-extraction` filter used by that local installation. Installing
+from GitHub in your own project instead uses the owner-qualified selector
+documented in the README. Do not add duplicate lifecycle hooks: installation
+contributes the prepare/finalise hooks automatically.
+
+## 2. Render your first graph
+
+While still in `examples/minimal`, use your editor's **Render Project** command
+or run:
+
+```powershell
+quarto render
+```
+
+Open `_site/index.html` and follow **Read the source-linked knowledge graph
+report**. The report is at `_site/knowledge-graph/report.html`.
+
+You should see the mathematical and educational meanings of **action** as
+different records, with their own identities, domains and source links. The
+mathematical definition occurs on both pages through a native Quarto include.
+Its identity is shared while its containing-page destinations differ. The
+theorem, proof and fictional citation remain ordinary Quarto content.
+
+No word matching creates those identities. The catalogue explicitly declares
+them. Records in this synthetic file marked `public: false` do not enter the
+graph; this does not hide ordinary authored page content or HTML attributes.
+
+## 3. Make a small YAML edit
+
+Open `knowledge.yml`. Find the object with `id: math:group-action` and change
+its English label from `action` to `group action`. Keep its identifier,
+`scope`, source path and anchor unchanged. Render again:
+
+```powershell
+quarto render
+```
+
+The report should now show **group action** for that mathematical object and
+retain **action** for the educational object. The mathematical identifier and
+its source links should remain the same. The private graph cache is derived
+data: you do not need to edit it or run a separate graph build.
+
+Next, edit a sentence in `index.qmd` and render again. QMD owns your page's
+content; the YAML catalogue owns its declared semantic identities and graph
+relationships. The `_definition.qmd` file demonstrates native content reuse.
+
+## 4. Turn on the interactive view
+
+In the sample `_quarto.yml`, add `navigation: true` to its existing complete
+`knowledge-graph` mapping:
+
+```yaml
+knowledge-graph:
+  declarations: knowledge.yml
+  mode: update
+  navigation: true
+```
+
+Run a normal preview from this same project folder:
+
+```powershell
+quarto preview --render all
+```
+
+Follow the graph report's **Explore the graph** link. Use the HTTP preview for
+the module-based navigator; opening its HTML through `file:` can block loading.
+The static report remains available independently of the diagram.
+
+Try dragging a node, then release it. An active layout resumes arranging it;
+an explicit pause or reduced-motion preference takes priority. Use the search,
+textual source list, movement buttons and full-page controls as alternatives
+to dragging. Layout position is not an additional relationship or evidence.
+
+To follow a reading journey, use **A route through these records**. Choose the
+educational **action** as Start and the mathematical **group action** as Goal,
+then **Compute a bounded candidate**. Inspect its direction, cost and source
+scope before choosing **Accept this route explicitly**. Following a source link
+now continues in the same tab, with a **Your reading route** panel on the source
+page. Use that panel to explore another concept and return, or mark the current
+concept complete and continue. Merely visiting its page does not mark it known.
+**Return to graph navigator** keeps the accepted route and its return context.
+
+Reading continuity is enabled with navigation; no extra YAML or script is
+required for this exercise. Retention is normally session-only. Choose the
+explicit retention checkbox only if you want it kept in this browser after the
+session, and use **Forget reading route** to remove it. The README explains
+storage failures and changed snapshots. Ordinary new-tab browser controls
+remain available.
+
+If you also activate other companion extensions on the tested Windows Quarto
+prerelease, consult the README's preview compatibility notes before relying on
+aggregate graph coverage. The sample exercise itself does not need a custom
+server or author script.
+
+## 5. Optional: connect two graph views with QMD and YAML
+
+Keep the same project. This exercise adds a view and a deliberate comparison;
+it does not equate the two meanings of *action*.
+
+In `knowledge.yml`, add this top-level mapping alongside `objects` and
+`relations`:
+
+```yaml
+graphs:
+  mathematics:
+    label: Mathematics
+    navigation: true
+    search: true
+```
+
+Find the existing `math:group-action` object. Add these two fields to that
+object, keeping its other fields and its identifier unchanged:
+
+```yaml
+graph: website
+graphs: [website, mathematics]
+```
+
+There is still one author declaration. It now appears in the website view and
+the named mathematics view. Other objects keep their existing website membership.
+
+Add an ordinary identified section at the end of `education.qmd`:
+
+```markdown
+## Compare two uses of action {#action-comparison}
+
+Educational action and a mathematical group action are different concepts.
+This reading route lets us contrast them without treating them as synonyms.
+```
+
+Then add this **top-level** section to `knowledge.yml`:
+
+```yaml
+navigation-links:
+  - id: he:compare-actions
+    from: {graph: website, id: he:action}
+    to: {graph: mathematics, id: math:group-action}
+    public: true
+    weight: 1
+    source: {path: education.qmd, anchor: action-comparison}
+```
+
+Finally, extend the existing complete `_quarto.yml` mapping:
+
+```yaml
+knowledge-graph:
+  declarations: knowledge.yml
+  mode: update
+  navigation: true
+  federation:
+    graphs: [website, mathematics]
+    label: Compare the two domains
+```
+
+Render the full project and refresh the HTTP preview. The expected graph report
+lists the separate website and mathematics navigators plus **Compare the two
+domains**, the connected view. Its reading routes use the explicit public link
+and retain the original graph identities. A declared link whose freshly rendered
+source lacks its anchor fails the build; correct the anchor and render again.
+Unavailable endpoints, unobserved link sources or unresolved prerequisites
+withhold that connected navigator rather than inventing a complete route.
+
+Open native website search and enter `action`. **All content** keeps the native
+search experience. **Search within → Mathematics** narrows discovery to that
+graph; **Website pages only** returns the original page index. If the optional
+filter is unavailable, ordinary All content search remains usable. None of
+these actions needs a model download.
+
+## 6. Use the approach in an existing website
+
+Keep your own `_quarto.yml`, theme, navigation and source pages. Add the installed
+filter to its existing `filters` list instead of replacing that configuration.
+
+The author files in this exercise are `knowledge.yml`, `index.qmd`,
+`education.qmd`, `_definition.qmd` and `references.bib`. An existing website
+does not need to copy every demonstration file. Start by copying/adapting the
+catalogue as a new project-root `knowledge.yml` and pointing its declarations
+to your own QMD paths and native anchors. Remove demonstration records and
+occurrences unless you also retain their source pages. Do not overwrite an
+existing catalogue or `index.qmd`; add reviewed entries to your existing files.
+The smaller `knowledge-compact.yml` is an alternative reference for the same
+scoped-declaration pattern.
+
+Keep private review data and `.quarto/knowledge-graph` out of website resources.
+Use the default deterministic workflow first; optional AI assistance is a
+separate authoring choice and does not run during rendering.
+
+## 7. Choose your next step
+
+Return to the repository root with `cd ../..`. The [README](README.md#declarations-and-configuration) is the advanced
+reference for named graphs, custom schemas, navigator preferences, public
+exports, incremental reuse, reviewed frozen baselines and private authoring/AI
+commands.
+
+Use its [named-question profiles](README.md#offer-named-questions-without-author-javascript)
+for your own hierarchy/evidence/date schema,
+[topic fragments](README.md#publish-optional-topic-fragments) for progressive
+navigator detail loading, [public data packaging](README.md#package-the-public-data-for-reuse)
+for declared rights and export hashes,
+[contextual review](README.md#review-ambiguous-terminology-without-a-model) for
+private proposals about existing identities, and
+[private history commands](README.md#inspect-retained-history-privately)
+to inspect receipt-bound older snapshots without republishing them. These are
+optional next steps; the normal author loop remains edit QMD/YAML, render, preview.
+
+For your own ordinary activity pages, the
+[reading continuity settings](README.md#continue-a-route-through-the-source-pages)
+add labelled local detours. They do not provide a live Argumentation Sandbox
+proof roundtrip. The normal tutorial needs neither a model nor a data licence
+decision; packaging and AI authoring remain separate opt-in choices.
+
+When Interactive CV and this extension are activated together, the CV's eligible
+public catalogue supplies its own separate graph automatically. Do not recreate
+CV records in `knowledge.yml`. Other compatible companions can consume the
+same explicit public identities; installing them alone does not activate their
+filters or imply consent to model downloads.
+
+Native includes keep their containing-page links. If you want to expose which
+original include contains a literal anchor token, the README's
+[source-origin option](README.md#original-source-coordinates)
+requires explicit public source paths and leaves ambiguous tokens unavailable.
+Unambiguous heading sections and fenced definitions/proofs also retain their
+original structural bounds and hashes; included files stay separate origins.
+To propose relationships between existing identities after rendering, follow the
+[private relation review](README.md#propose-and-review-relations). This optional
+step keeps review separate from the normal edit, render and preview loop.
+If literal context cues are insufficient, the README's
+[semantic identity proposals](README.md#propose-semantic-identities-using-a-local-model)
+use an explicitly started local model. That advanced workflow keeps server
+configuration, prompts, responses and review files in a separate private folder
+outside the project and every Git checkout. Put only already-public text in QMD;
+no model is needed for this tutorial.
+For a custom client, the [query-provider contract](README.md#discover-the-public-query-provider)
+describes the current public graph and shared query API; the normal tutorial
+needs no client code or additional setting.

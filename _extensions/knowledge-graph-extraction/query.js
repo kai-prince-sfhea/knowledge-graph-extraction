@@ -3,6 +3,11 @@
 /** Named queries over one coherent public snapshot. `scope` filters domains;
  * `requiredSources` checks source coverage. Reader choices never alter facts. */
 export const QUERY_VERSION = 1;
+/** Graph identity separates reader state; snapshot identity still validates it. */
+export function navigationStorageKey(graphId = 'website') {
+  if (typeof graphId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(graphId) || ['constructor', 'prototype'].includes(graphId)) throw new Error('a safe graph identity is required for reader storage');
+  return `quarto-public-graph-navigation-v1:${graphId}`;
+}
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const sorted = values => [...new Set(values)].sort(compare);
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -333,6 +338,7 @@ export function advanceRoute(state, options = {}) {
   const next = navigation(state);
   if (!next.route) throw new Error('no accepted route');
   if (next.detours.length) throw new Error('return from exploration before advancing the accepted route');
+  if (next.route.needsReview) throw new Error('review changed reader assumptions and explicitly accept a route before advancing');
   const current = next.route.nodes[next.route.index];
   if (options.completeCurrent !== false) { next.route.completed = sorted([...next.route.completed, current]); next.known = sorted([...next.known, current]); Object.defineProperty(next.knowledge, current, { value: 'known', writable: true, enumerable: true, configurable: true }); }
   if (next.route.index + 1 < next.route.nodes.length) next.route.index += 1;
@@ -394,4 +400,252 @@ export function restoreNavigationState(graph, saved) {
     if (!Number.isFinite(cost) || route.cost !== cost) throw new Error('saved route cost differs from its recorded assumptions');
   }
   return state;
+}
+
+// Extended named operations deliberately take explicit semantic mappings.
+// A relation called "references" is not automatically evidence, and two
+// concepts printed on one page are not automatically connected or learned.
+function extendedOptions(value, fields) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('named query options must be a mapping');
+  const allowed = new Set(['scope', 'requiredSources', 'snapshotId', ...fields]);
+  if (Object.keys(value).some(key => !allowed.has(key))) throw new Error('unsupported named query option');
+  return value;
+}
+function stringList(value, name, optional = false) {
+  if (value === undefined && optional) return undefined;
+  if (!Array.isArray(value) || value.length > 1000 || value.some(item => typeof item !== 'string' || !item || item.length > 8192) || new Set(value).size !== value.length) throw new Error(`${name} must be a bounded list of distinct nonempty strings`);
+  return value;
+}
+function relationSemantics(value, directions) {
+  if (!Array.isArray(value) || !value.length || value.length > 32) throw new Error('explicit relation semantics are required');
+  const seen = new Set();
+  return value.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !['type', 'direction'].includes(key)) || typeof item.type !== 'string' || !item.type || item.type.length > 128 || !directions.includes(item.direction) || seen.has(item.type)) throw new Error('relation semantics require distinct types and a supported explicit direction');
+    seen.add(item.type); return { type: item.type, direction: item.direction };
+  }).sort((a, b) => compare(a.type, b.type));
+}
+function selectedObjects(ctx, options) {
+  const types = stringList(options.types, 'types', true);
+  return [...ctx.objects.values()].filter(item => inScope(item, options.scope) && (!types || types.includes(item.type))).sort((a, b) => compare(a.id, b.id));
+}
+/** Iterative SCCs distinguish an actual cycle from a diamond/shared ancestor.
+ * Only the already bounded, observed closure is inspected. */
+function cyclicComponents(nodes, links) {
+  const ids = [...nodes].sort(compare), forward = new Map(ids.map(id => [id, []])), reverse = new Map(ids.map(id => [id, []]));
+  for (const { from, to } of links) if (forward.has(from) && forward.has(to)) { forward.get(from).push(to); reverse.get(to).push(from); }
+  const seen = new Set(), order = [];
+  for (const id of ids) if (!seen.has(id)) {
+    seen.add(id); const stack = [{ id, next: 0 }];
+    while (stack.length) { const frame = stack[stack.length - 1], adjacent = forward.get(frame.id);
+      if (frame.next === adjacent.length) { order.push(frame.id); stack.pop(); continue; }
+      const next = adjacent[frame.next++]; if (!seen.has(next)) { seen.add(next); stack.push({ id: next, next: 0 }); }
+    }
+  }
+  seen.clear(); const result = [];
+  for (const id of order.reverse()) if (!seen.has(id)) {
+    const component = [], stack = [id]; seen.add(id);
+    while (stack.length) { const current = stack.pop(); component.push(current); for (const next of reverse.get(current)) if (!seen.has(next)) { seen.add(next); stack.push(next); } }
+    if (component.length > 1 || forward.get(id).includes(id)) result.push(component.sort(compare));
+  }
+  return result.sort((a, b) => compare(a[0], b[0]));
+}
+/** Ancestor/descendant closure under caller-declared hierarchy directions.
+ * Missing fragments and reached bounds never establish global absence. */
+export function hierarchyClosure(graph, options = {}) {
+  extendedOptions(options, ['start', 'relations', 'direction', 'includeSelf', 'maxDepth', 'maxNodes', 'maxEdges']);
+  const ctx = context(graph, 'hierarchy', options), failure = coverageFailure(ctx); if (failure) return failure;
+  const semantics = relationSemantics(options.relations, ['child-to-parent', 'parent-to-child']);
+  const direction = options.direction ?? 'ancestors';
+  if (!['ancestors', 'descendants'].includes(direction) || options.includeSelf !== undefined && typeof options.includeSelf !== 'boolean') throw new Error('hierarchy direction/includeSelf is invalid');
+  if (!ctx.objects.has(options.start) || !inScope(ctx.objects.get(options.start), options.scope)) return result(ctx, null, true, graph.status === 'complete' ? 'no-match-in-declared-scope' : 'incomplete-source-coverage');
+  const maxDepth = integer(options.maxDepth, 8, 100, 'maxDepth'), maxNodes = integer(options.maxNodes, 200, 10000, 'maxNodes'), maxEdges = integer(options.maxEdges, 10000, 100000, 'maxEdges');
+  const mapping = new Map(semantics.map(item => [item.type, item.direction])), adjacency = new Map(), ordered = [...ctx.edges.values()].sort((a, b) => compare(a.id, b.id));
+  let truncated = ordered.length > maxEdges;
+  for (const edge of ordered.slice(0, maxEdges)) {
+    const sense = mapping.get(edge.type); if (!sense || !inScope(edge, options.scope) || !inScope(ctx.objects.get(edge.from), options.scope) || !inScope(ctx.objects.get(edge.to), options.scope)) continue;
+    const child = sense === 'child-to-parent' ? edge.from : edge.to, parent = sense === 'child-to-parent' ? edge.to : edge.from;
+    const from = direction === 'ancestors' ? child : parent, to = direction === 'ancestors' ? parent : child;
+    const values = adjacency.get(from) ?? []; values.push({ edge: edge.id, from, to }); adjacency.set(from, values);
+  }
+  const queue = [options.start], depths = new Map([[options.start, 0]]), frontier = new Set(), observed = new Map();
+  for (let index = 0; index < queue.length; index++) for (const link of adjacency.get(queue[index]) ?? []) {
+    if (!depths.has(link.to)) {
+      if (depths.get(link.from) === maxDepth || depths.size === maxNodes) { truncated = true; frontier.add(link.to); continue; }
+      depths.set(link.to, depths.get(link.from) + 1); queue.push(link.to);
+    }
+    observed.set(link.edge, link);
+  }
+  const nodes = queue.filter(id => options.includeSelf === true || id !== options.start), links = [...observed.values()];
+  const output = result(ctx, { nodes, edges: sorted(observed.keys()), depths: Object.fromEntries(nodes.map(id => [id, depths.get(id)])), frontier: sorted(frontier),
+    cycles: cyclicComponents(depths.keys(), links), assumptions: { direction, relations: semantics, includeSelf: options.includeSelf === true, closure: 'within-requested-domain-and-loaded-public-snapshot' } }, !truncated, truncated ? 'hierarchy-limit' : undefined);
+  if (!nodes.length && (truncated || graph.status !== 'complete')) output.status = 'unknown';
+  return output;
+}
+/** Return explicitly mapped evidence associations, never a truth/support verdict.
+ * Citation/reference edges participate only when the caller selects their type. */
+export function evidenceLookup(graph, options = {}) {
+  extendedOptions(options, ['target', 'relations', 'types', 'limit', 'maxEdges']);
+  const ctx = context(graph, 'evidence', options), failure = coverageFailure(ctx); if (failure) return failure;
+  const semantics = relationSemantics(options.relations, ['target-to-evidence', 'evidence-to-target']);
+  const types = stringList(options.types, 'types', true), limit = integer(options.limit, 200, 10000, 'limit'), maxEdges = integer(options.maxEdges, 10000, 100000, 'maxEdges');
+  if (!ctx.objects.has(options.target) || !inScope(ctx.objects.get(options.target), options.scope)) return result(ctx, null, true, graph.status === 'complete' ? 'no-match-in-declared-scope' : 'incomplete-source-coverage');
+  const mappings = new Map(semantics.map(item => [item.type, item.direction])), ordered = [...ctx.edges.values()].sort((a, b) => compare(a.id, b.id)), associations = [];
+  let truncated = ordered.length > maxEdges;
+  for (const edge of ordered.slice(0, maxEdges)) {
+    const direction = mappings.get(edge.type); if (!direction || !inScope(edge, options.scope)) continue;
+    const target = direction === 'target-to-evidence' ? edge.from : edge.to, evidenceId = direction === 'target-to-evidence' ? edge.to : edge.from;
+    const evidence = ctx.objects.get(evidenceId);
+    if (target !== options.target || !inScope(evidence, options.scope) || types && !types.includes(evidence.type)) continue;
+    if (associations.length === limit) { truncated = true; break; }
+    associations.push({ evidence: copy(evidence), relation: copy(edge), direction,
+      occurrences: copy(graph.occurrences.filter(item => item.target === evidenceId)) });
+  }
+  const output = result(ctx, { target: options.target, associations, assumptions: { relations: semantics, qualification: 'author-declared-association; no independent support or proof verdict' } }, !truncated, truncated ? 'evidence-limit' : undefined);
+  if (!associations.length && (truncated || graph.status !== 'complete')) output.status = 'unknown';
+  return output;
+}
+/** Counts are exact only on exhaustive complete coverage. Otherwise observed
+ * values are lower bounds and the exact totals deliberately remain null. */
+export function scopedCounts(graph, options = {}) {
+  extendedOptions(options, ['types', 'relationTypes', 'maxRecords']);
+  const ctx = context(graph, 'counts', options), failure = coverageFailure(ctx); if (failure) return failure;
+  const types = stringList(options.types, 'types', true), relationTypes = stringList(options.relationTypes, 'relationTypes', true), maxRecords = integer(options.maxRecords, 100000, 1000000, 'maxRecords');
+  const objects = [...ctx.objects.values()].sort((a, b) => compare(a.id, b.id)), edges = [...ctx.edges.values()].sort((a, b) => compare(a.id, b.id));
+  const selected = new Set(), objectTypes = new Map(), objectScopes = new Map(), edgeTypes = new Map(), edgeScopes = new Map();
+  const increment = (values, key) => values.set(key, (values.get(key) ?? 0) + 1);
+  let scanned = 0, objectCount = 0, edgeCount = 0;
+  for (const object of objects) { if (scanned === maxRecords) break; scanned++;
+    if (!inScope(object, options.scope) || types && !types.includes(object.type)) continue;
+    selected.add(object.id); objectCount++; increment(objectTypes, object.type); increment(objectScopes, object.scope);
+  }
+  for (const edge of edges) { if (scanned === maxRecords) break; scanned++;
+    if (!selected.has(edge.from) || !selected.has(edge.to) || !inScope(edge, options.scope) || relationTypes && !relationTypes.includes(edge.type)) continue;
+    edgeCount++; increment(edgeTypes, edge.type); increment(edgeScopes, edge.scope);
+  }
+  const exhaustive = scanned === objects.length + edges.length, exact = exhaustive && graph.status === 'complete';
+  const groups = values => [...values].sort(([a], [b]) => compare(a, b)).map(([key, observed]) => ({ key, observed, value: exact ? observed : null }));
+  return result(ctx, { exact, totals: exact ? { objects: objectCount, relations: edgeCount } : null, observed: { objects: objectCount, relations: edgeCount },
+    objectsByType: groups(objectTypes), objectsByScope: groups(objectScopes), relationsByType: groups(edgeTypes), relationsByScope: groups(edgeScopes),
+    assumptions: { relationEndpoints: 'both endpoints belong to selected objects', observedCounts: 'lower bounds unless exact is true' } }, exhaustive, !exhaustive ? 'count-limit' : graph.status !== 'complete' ? 'incomplete-source-coverage' : undefined, { scannedRecords: scanned });
+}
+function day(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, date] = value.split('-').map(Number), leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const length = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || date < 1 || date > length[month - 1]) return null;
+  // setUTCFullYear avoids Date.UTC's special interpretation of years 00–99.
+  const parsed = new Date(0); parsed.setUTCHours(0, 0, 0, 0); parsed.setUTCFullYear(year, month - 1, date); return parsed.getTime();
+}
+/** A day-level closed-interval filter, not OWL-Time, Allen/Prolog reasoning,
+ * timezone inference, uncertain-date reasoning or an interpretation of Present.
+ * Missing/unsupported values remain explicitly undetermined. */
+export function filterByTime(graph, options = {}) {
+  extendedOptions(options, ['fields', 'window', 'match', 'types', 'maxRecords']);
+  const ctx = context(graph, 'time-filter', options), failure = coverageFailure(ctx); if (failure) return failure;
+  const fields = options.fields, window = options.window;
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields) || Object.keys(fields).some(key => !['instant', 'start', 'end'].includes(key)) ||
+      !(Object.keys(fields).length === 1 && typeof fields.instant === 'string' && fields.instant || Object.keys(fields).length === 2 && typeof fields.start === 'string' && fields.start && typeof fields.end === 'string' && fields.end) ||
+      Object.values(fields).some(value => value.length > 128)) throw new Error('time fields require one instant property or explicit start/end properties');
+  if (!window || typeof window !== 'object' || Array.isArray(window) || Object.keys(window).some(key => !['start', 'end'].includes(key)) || day(window.start) === null || day(window.end) === null || day(window.start) > day(window.end)) throw new Error('time window requires ordered valid YYYY-MM-DD start/end dates');
+  const match = options.match ?? 'overlaps'; if (!['overlaps', 'contained', 'starts-within'].includes(match)) throw new Error('unsupported closed-interval time match');
+  const maxRecords = integer(options.maxRecords, 10000, 100000, 'maxRecords'), objects = selectedObjects(ctx, options), matches = [], nonmatches = [], undetermined = [];
+  for (const object of objects.slice(0, maxRecords)) {
+    const rawStart = object.properties?.[fields.instant ?? fields.start], rawEnd = object.properties?.[fields.instant ?? fields.end];
+    const start = day(rawStart), end = day(rawEnd);
+    if (start === null || end === null || start > end) { undetermined.push({ id: object.id, reason: rawStart === undefined || rawEnd === undefined ? 'missing-time-property' : start === null || end === null ? 'unsupported-or-invalid-calendar-date' : 'reversed-time-interval' }); continue; }
+    const low = day(window.start), high = day(window.end), accepted = match === 'overlaps' ? start <= high && end >= low : match === 'contained' ? start >= low && end <= high : start >= low && start <= high;
+    if (accepted) matches.push(copy(object)); else nonmatches.push(object.id);
+  }
+  const enumerationComplete = objects.length <= maxRecords, exhaustive = enumerationComplete && !undetermined.length;
+  const output = result(ctx, { matches, nonmatches, undetermined, enumerationComplete,
+    unexaminedRecords: Math.max(0, objects.length - maxRecords), assumptions: { fields: { ...fields }, window: { ...window }, match, calendar: 'proleptic-Gregorian YYYY-MM-DD, closed inclusive day bounds; no inferred open or uncertain endpoints' } }, exhaustive,
+    !enumerationComplete ? 'time-filter-limit' : undetermined.length ? 'undetermined-time-values' : graph.status !== 'complete' ? 'incomplete-source-coverage' : undefined);
+  if (!matches.length && (!exhaustive || graph.status !== 'complete')) output.status = 'unknown';
+  return output;
+}
+function pageName(value) {
+  if (typeof value !== 'string' || !value || value.length > 8192 || value !== value.trim() || /[\u0000-\u001f\\?#]/.test(value) || value.startsWith('/') || /^[A-Za-z][A-Za-z\d+.-]*:/.test(value)) throw new Error('page must be a safe project-relative output URL without query or fragment');
+  let decoded; try { decoded = decodeURIComponent(value); } catch { throw new Error('page URL has invalid encoding'); }
+  if (/[\u0000-\u001f\\?#]/.test(decoded) || decoded.startsWith('/') || /^[A-Za-z][A-Za-z\d+.-]*:/.test(decoded) || decoded.split('/').some((part, index, parts) => !part && index !== parts.length - 1 || part === '.' || part === '..') || /%2f|%5c/i.test(value)) throw new Error('page URL contains an unsafe or ambiguous path');
+  return new URL(value, 'https://quarto.invalid/').pathname.slice(1);
+}
+function pageInventory(ctx, options) {
+  const maxRecords = integer(options.maxRecords, 100000, 1000000, 'maxRecords');
+  const available = selectedObjects(ctx, options), records = available.slice(0, maxRecords), selected = new Set(records.map(record => record.id)), occurrences = new Map(), pages = new Map();
+  const ordered = [...ctx.graph.occurrences].sort((a, b) => compare(`${a.target}\n${a.destination}\n${a.id ?? ''}`, `${b.target}\n${b.destination}\n${b.id ?? ''}`));
+  let scanned = records.length;
+  for (const occurrence of ordered) { if (scanned === maxRecords) break; scanned++;
+    if (!ctx.objects.has(occurrence.target)) throw new Error('page occurrence has an unavailable semantic target');
+    if (!selected.has(occurrence.target)) continue;
+    if (typeof occurrence.destination !== 'string' || !occurrence.source || typeof occurrence.source.path !== 'string' || typeof occurrence.source.anchor !== 'string') throw new Error('page occurrence requires source/anchor and a destination');
+    const split = occurrence.destination.indexOf('#'); if (split < 1) throw new Error('page occurrence requires an anchored output URL');
+    const page = pageName(occurrence.destination.slice(0, split)); let anchor;
+    try { anchor = decodeURIComponent(occurrence.destination.slice(split + 1)); } catch { throw new Error('page occurrence fragment has invalid encoding'); }
+    if (anchor !== occurrence.source.anchor || !anchor) throw new Error('page occurrence fragment differs from its authored source anchor');
+    const object = ctx.objects.get(occurrence.target), canonical = object.source?.path === occurrence.source.path && object.source?.anchor === occurrence.source.anchor;
+    const entry = { record: occurrence.target, page, destination: occurrence.destination, source: copy(occurrence.source), canonical, ...(typeof occurrence.id === 'string' ? { occurrenceId: occurrence.id } : {}) };
+    const values = occurrences.get(entry.record) ?? []; if (!values.some(value => value.destination === entry.destination && value.source.path === entry.source.path && value.source.anchor === entry.source.anchor)) values.push(entry); occurrences.set(entry.record, values);
+    const members = pages.get(page) ?? new Set(); members.add(entry.record); pages.set(page, members);
+  }
+  for (const values of occurrences.values()) values.sort((a, b) => Number(b.canonical) - Number(a.canonical) || compare(a.destination, b.destination));
+  return { records, occurrences, pages, unmapped: records.filter(record => !occurrences.has(record.id)).map(record => record.id), exhaustive: scanned === available.length + ordered.length, scanned };
+}
+/** Page identity comes only from admitted output occurrences, never a source
+ * filename rewrite. Membership is not a semantic edge or evidence of learning. */
+export function pageIndex(graph, options = {}) {
+  extendedOptions(options, ['types', 'maxRecords']);
+  const ctx = context(graph, 'page-index', options), failure = coverageFailure(ctx); if (failure) return failure;
+  const index = pageInventory(ctx, options), exhaustive = index.exhaustive && !index.unmapped.length;
+  const pages = [...index.pages].sort(([a], [b]) => compare(a, b)).map(([page, members]) => ({ id: page, url: page,
+    records: [...members].sort(compare).map(id => ({ id, label: recordLabel(ctx.objects.get(id)), scope: ctx.objects.get(id).scope, occurrences: copy(index.occurrences.get(id).filter(item => item.page === page)) })) }));
+  const output = result(ctx, { pages, unmappedRecords: index.unmapped, assumptions: { source: 'validated public output occurrences; no inferred directory/index aliases or page-wide knowledge' } }, exhaustive, !index.exhaustive ? 'page-index-limit' : index.unmapped.length ? 'page-mapping-incomplete' : undefined, { scannedRecords: index.scanned });
+  if (!pages.length && (!exhaustive || graph.status !== 'complete')) output.status = 'unknown';
+  return output;
+}
+/** Least semantic-cost route between records appearing on two chosen pages.
+ * The page itinerary is a projection with a complete record/edge witness; it is
+ * not a quotient-graph shortcut through unrelated co-resident records, nor a
+ * claim to the fewest pages. One global pair/state budget bounds all searches. */
+export function shortestPagePath(graph, options = {}) {
+  extendedOptions(options, ['startPage', 'goalPage', 'startRecord', 'goalRecord', 'direction', 'relationTypes', 'known', 'earlier', 'edgeWeights', 'difficultyWeights', 'difficultyMultiplier', 'defaultEdgeWeight', 'prerequisiteRelations', 'maxStates', 'maxSteps', 'maxPairs', 'maxRecords']);
+  const ctx = context(graph, 'shortest-page-path', options), failure = coverageFailure(ctx); if (failure) return failure;
+  const startPage = pageName(options.startPage), goalPage = pageName(options.goalPage), index = pageInventory(ctx, options);
+  if (!index.exhaustive || index.unmapped.length) return result(ctx, null, false, !index.exhaustive ? 'page-index-limit' : 'page-mapping-incomplete', { unmappedRecords: index.unmapped });
+  const choose = (page, explicit) => { const ids = [...index.pages.get(page) ?? []].sort(compare); if (explicit !== undefined && (typeof explicit !== 'string' || !ids.includes(explicit))) throw new Error('explicit page endpoint record must have an occurrence on that page'); return explicit === undefined ? ids : [explicit]; };
+  const starts = choose(startPage, options.startRecord), goals = choose(goalPage, options.goalRecord);
+  if (!starts.length || !goals.length) return result(ctx, null, true, graph.status === 'complete' ? 'no-page-in-declared-scope' : 'incomplete-source-coverage');
+  const maxStates = integer(options.maxStates, 5000, 100000, 'maxStates'), maxPairs = integer(options.maxPairs, 200, 10000, 'maxPairs');
+  const { startPage: _startPage, goalPage: _goalPage, startRecord: _startRecord, goalRecord: _goalRecord, maxPairs: _maxPairs, maxRecords: _maxRecords, ...routeOptions } = options;
+  let consumed = 0, attempted = 0, truncated = false, best = null;
+  outer: for (const start of starts) for (const goal of goals) {
+    if (attempted === maxPairs || consumed === maxStates) { truncated = true; break outer; }
+    const candidate = shortestPath(graph, { ...routeOptions, start, goal, maxStates: maxStates - consumed }); attempted++;
+    consumed += candidate.generatedStates ?? 0;
+    if (!candidate.exhaustive) truncated = true;
+    if (!candidate.answer) continue;
+    if (!best || candidate.answer.cost < best.answer.cost || candidate.answer.cost === best.answer.cost && (candidate.answer.nodes.length < best.answer.nodes.length || candidate.answer.nodes.length === best.answer.nodes.length && compare(JSON.stringify(candidate.answer.nodes), JSON.stringify(best.answer.nodes)) < 0)) best = candidate;
+  }
+  if (!best) return result(ctx, null, !truncated, truncated ? 'page-route-search-limit' : graph.status === 'complete' ? 'no-page-route-in-declared-scope' : 'incomplete-source-coverage', { attemptedPairs: attempted, generatedStates: consumed });
+  const witness = best.answer, chosen = witness.nodes.map((id, at) => {
+    const values = index.occurrences.get(id), page = at === 0 ? startPage : at === witness.nodes.length - 1 ? goalPage : null;
+    return values.find(value => page !== null && value.page === page) ?? values[0];
+  });
+  if (witness.nodes.length === 1 && startPage !== goalPage) chosen.push(index.occurrences.get(witness.nodes[0]).find(value => value.page === goalPage));
+  const steps = [];
+  chosen.forEach((entry, at) => {
+    let step = steps[steps.length - 1]; if (!step || step.page !== entry.page) { step = { page: entry.page, records: [], occurrences: [], recordIndices: [] }; steps.push(step); }
+    const recordIndex = Math.min(at, witness.nodes.length - 1); step.records.push(entry.record); step.occurrences.push(copy(entry)); step.recordIndices.push(recordIndex);
+  });
+  const exhaustive = !truncated, optimal = graph.status === 'complete' && exhaustive;
+  const semanticRoute = copy(best); semanticRoute.answer.optimal = optimal; semanticRoute.optimal = optimal;
+  if (!exhaustive) { semanticRoute.status = 'incomplete'; semanticRoute.exhaustive = false; semanticRoute.reason = 'page-route-search-limit'; }
+  return result(ctx, { pages: steps.map(step => step.page), steps, cost: witness.cost, optimal,
+    semanticNodes: [...witness.nodes], semanticEdges: [...witness.edges], costs: copy(witness.costs), prerequisites: copy(witness.prerequisites),
+    transitions: witness.edges.map((id, at) => ({ relation: copy(ctx.edges.get(id)), from: copy(chosen[at]), to: copy(chosen[at + 1]), cost: copy(witness.costs[at]) })),
+    ...(witness.nodes.length === 1 && chosen.length === 2 ? { occurrenceTransfer: { kind: 'same-semantic-record-different-source-occurrence', record: witness.nodes[0], from: copy(chosen[0]), to: copy(chosen[1]), semanticCost: 0 } } : {}),
+    assumptions: { startPage, goalPage, startRecord: options.startRecord ?? null, goalRecord: options.goalRecord ?? null,
+      objective: 'minimum semantic edge-plus-entering-record-difficulty cost across eligible endpoint records, not fewest pages',
+      intermediateOccurrences: 'authored canonical occurrence when available, otherwise first stable admitted destination', pageCompletion: 'never implies all page records known' } }, exhaustive,
+    truncated ? 'page-route-search-limit' : graph.status !== 'complete' ? 'provisional-page-route' : undefined,
+    { semanticRoute, attemptedPairs: attempted, generatedStates: consumed, optimal });
 }

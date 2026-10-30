@@ -2,9 +2,10 @@
 import { atomicJson, canonical, confined, digest, fail, loadProject, projectPath, publicRecord, PUBLIC, readJson, STATE, VERSION } from './core.ts';
 import { activeContext, outputPath, outputRoot } from './context.ts';
 import { readExtractionCache, sourceKeys } from './cache.ts';
-import { BASELINE_LIMIT, makeBaseline, validateBaseline } from './baselines.ts';
+import { BASELINE_LIMIT, makeBaseline, validateBaseline, compareBaselinePublication } from './baselines.ts';
 import { basename, dirname, join, relative, isAbsolute } from 'stdlib/path';
 import { privatePath } from './private-path.ts';
+import { graphViewRuntimeIdentity } from './graph-view.ts';
 async function resolvedTarget(path: string): Promise<string> {
   try { return await Deno.realPath(path); }
   catch (error) { if (!(error instanceof Deno.errors.NotFound)) throw error; return join(await resolvedTarget(dirname(path)), basename(path)); }
@@ -95,22 +96,27 @@ async function main(): Promise<void> {
   // declaration projection. A self-rehashed bundle cannot add private fields,
   // new facts or occurrences; actual HTML destinations need the full render.
   const byId = (a: any, b: any) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  const objects = project.objects.filter((item: any) => item.eligible).map((item: any) => publicRecord(project.schema, 'object', item)).sort(byId);
+  const websiteObjects = project.objects.filter((item: any) => item.eligible && (item.graphIds ?? [item.graphId ?? 'website']).includes('website'));
+  const objects = websiteObjects.map((item: any) => publicRecord(project.schema, 'object', item)).sort(byId);
   const ids = new Set(objects.map((item: any) => item.id));
-  const relations = project.relations.filter((item: any) => item.eligible && ids.has(item.from) && ids.has(item.to))
+  const relations = project.relations.filter((item: any) => item.eligible && (item.graphIds ?? [item.graphId ?? 'website']).includes('website') && ids.has(item.from) && ids.has(item.to))
     .map((item: any) => publicRecord(project.schema, 'relation', item)).sort(byId);
   if (canonical(objects) !== canonical([...bundle.graph.objects].sort(byId)) || canonical(relations) !== canonical([...bundle.graph.relations].sort(byId))) fail('baseline records differ from current allowlisted public declarations');
-  const occurrences = project.objects.filter((item: any) => item.eligible).flatMap((item: any) => item.occurrences.map((source: any) => ({ target: item.id, source })));
+  const occurrences = websiteObjects.flatMap((item: any) => item.occurrences.map((source: any) => ({ target: item.id, source })));
   const order = (a: any, b: any) => canonical(a) < canonical(b) ? -1 : canonical(a) > canonical(b) ? 1 : 0;
   if (canonical(occurrences.sort(order)) !== canonical(bundle.graph.occurrences.map((item: any) => ({ target: item.target, source: item.source })).sort(order))) fail('baseline occurrences differ from current public declarations');
   const schema = project.schemaPath ? { version: project.schemaVersion, digest: project.schemaDigest } : undefined;
-  const publication = project.navigation || project.exportOptions ? {
-    ...(project.navigation ? { navigation: true, runtimeDigest: await digest(canonical(project.dependencies.filter((item: any) => item.kind === 'extractor'))) } : {}),
-    ...(project.exportOptions ? { exports: project.exportOptions } : {}) } : undefined;
-  if (canonical(bundle.graph.schema ?? null) !== canonical(schema ?? null) || canonical(bundle.graph.publication ?? null) !== canonical(publication ?? null)) fail('baseline schema or publication differs from current configuration');
+  const publication = project.navigation || project.exportOptions || project.packageOptions ? {
+    ...(project.navigation ? { navigation: true, runtimeDigest: await digest(canonical(graphViewRuntimeIdentity(project.dependencies.filter((item: any) => item.kind === 'extractor'), project.viewOptions, project.queryProfiles))) } : {}),
+    ...(project.exportOptions ? { exports: project.exportOptions } : {}),
+    ...(project.packageOptions ? { package: project.packageOptions } : {}) } : undefined;
+  if (canonical(bundle.graph.schema ?? null) !== canonical(schema ?? null)) fail('baseline schema differs from current configuration');
+  const composition = compareBaselinePublication(bundle.graph.publication, publication);
   if (command === 'inspect') {
     console.log(JSON.stringify({ bundleVersion: bundle.bundleVersion, snapshotId: bundle.manifest.snapshotId,
-      dependencyDigest: bundle.manifest.dependencyDigest, status: 'matching-expected-baseline', sources: project.sources,
+      dependencyDigest: bundle.manifest.dependencyDigest,
+      status: composition.composition === 'absent' ? 'matching-expected-baseline' : 'matching-source-context-composition-pending',
+      ...composition, sources: project.sources,
       fullFrozenRenderRequired: true, nativeHtmlOrExtractionCacheIncluded: false }, null, 2));
     return;
   }
@@ -123,6 +129,7 @@ async function main(): Promise<void> {
   await atomicJson(receipt, { bundleVersion: 0, bundleHash: bundle.hash,
     snapshotId: bundle.manifest.snapshotId, dependencyDigest: bundle.manifest.dependencyDigest, source: file,
     fullFrozenRenderRequired: true });
-  console.log('Expected baseline imported; make a complete KG_MODE=frozen quarto render. No public outputs or extraction observations were installed.');
+  console.log('Expected baseline imported; make a complete KG_MODE=frozen quarto render. No public outputs or extraction observations were installed.'
+    + (composition.composition === 'absent' ? '' : ' The retained composition commitment is pending fresh full frozen reconstruction; import does not verify its producer facts.'));
 }
 await main();

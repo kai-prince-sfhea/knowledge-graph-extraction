@@ -1,6 +1,7 @@
 import { atomicJson, canonical, confined, digest, fail, readJson, STATE } from "./core.ts";
 import { relative } from "stdlib/path";
 import { outputRoot } from "./context.ts";
+import { privatePath } from "./private-path.ts";
 
 const pointer = `${STATE}/extraction/committed.json`;
 type Value = Record<string, any>;
@@ -9,12 +10,31 @@ export type CacheEntry = {
   parts: { objects: Value[]; relations: Value[]; occurrences: Value[] };
 };
 export type ExtractionCache = { cacheVersion: 1; snapshotId: string; dependencyDigest: string;
-  entries: Record<string, CacheEntry>; hash: string };
+  entries: Record<string, CacheEntry>; nativeOutputs?: Record<string, string>; hash: string };
 
-/** Only content-addressed complete successful runs advance this private pointer. */
+/** A bounded native destination inventory, not evidence of an AST observation,
+ * source freshness or complete graph coverage. It deliberately retains paths of
+ * unsafe/unobserved pages so a coordinator can refresh their managed head URLs. */
+async function validateNativeOutputs(root: string, value: unknown): Promise<void> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length > 100000) {
+    fail("invalid extraction native-output inventory; inspect private cache state before rebuilding");
+  }
+  for (const [source, output] of Object.entries(value as Record<string, unknown>)) {
+    if (!/\.qmd$/i.test(source) || typeof output !== "string" || !/\.html?$/i.test(output)) {
+      fail("invalid extraction native-output inventory; inspect private cache state before rebuilding");
+    }
+    // Confinement verifies paths even when their files are currently absent.
+    // The coordinator additionally restricts these to the current input/output
+    // inventory; this cache helper has no authority to invent that inventory.
+    await confined(root, source); await confined(root, output);
+  }
+}
+
+/** Successful finalized page observations, including an explicitly incomplete
+ * aggregate. Last-complete publication/frozen baselines are separate pointers. */
 export async function readExtractionCache(root: string): Promise<ExtractionCache | null> {
   let value: any;
-  try { value = await readJson(await confined(root, pointer)); }
+  try { value = await readJson(await privatePath(root, pointer)); }
   catch (error) { if (error instanceof Deno.errors.NotFound) return null; throw error; }
   const { hash, ...content } = value;
   if (value.cacheVersion !== 1 || typeof hash !== "string" || hash !== await digest(canonical(content))
@@ -31,6 +51,7 @@ export async function readExtractionCache(root: string): Promise<ExtractionCache
       fail("invalid extraction cache entry; run build.ts reset from the project root, then make a complete update render");
     }
   }
+  if (value.nativeOutputs !== undefined) await validateNativeOutputs(root, value.nativeOutputs);
   return value;
 }
 
@@ -75,7 +96,11 @@ export async function reusable(root: string, outputDir: string, source: string, 
 }
 
 export async function commitExtractionCache(root: string, snapshotId: string, dependencyDigest: string,
-    entries: Record<string, CacheEntry>): Promise<void> {
-  const content = { cacheVersion: 1, snapshotId, dependencyDigest, entries };
-  await atomicJson(await confined(root, pointer), { ...content, hash: await digest(canonical(content)) });
+    entries: Record<string, CacheEntry>, nativeOutputs?: Record<string, string>): Promise<void> {
+  if (nativeOutputs !== undefined) await validateNativeOutputs(root, nativeOutputs);
+  // Omitting the optional inventory preserves exact historic cache bytes and
+  // hash preimages. An explicitly supplied empty mapping remains meaningful.
+  const content = { cacheVersion: 1, snapshotId, dependencyDigest, entries,
+    ...(nativeOutputs === undefined ? {} : { nativeOutputs }) };
+  await atomicJson(await privatePath(root, pointer), { ...content, hash: await digest(canonical(content)) });
 }

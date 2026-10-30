@@ -23,7 +23,8 @@ const { root, inspection, outputDir } = context;
 const project = await loadProject(root, inspection);
 if (mode !== "inspect") await requireImportedBaselineRender(root, project.mode, false);
 if (!project.cacheEnabled) fail("cached assembly requires knowledge-graph.cache: true; enable it and render the project first");
-const cache = await readExtractionCache(root), keys = await sourceKeys(project, outputDir);
+const cache = await readExtractionCache(root), producerSourceKeys = await sourceKeys({ ...project, sources: project.producerSources }, outputDir);
+const keys = Object.fromEntries(project.sources.map((source: string) => [source, producerSourceKeys[source]]));
 const reused: Record<string, any> = {}, reasons: Record<string, string> = {};
 for (const source of project.sources) {
   const result = await reusable(root, outputDir, source, keys[source], cache, project.cacheUnsafeSources);
@@ -43,10 +44,10 @@ if (project.mode === "frozen") {
 }
 await restorePublication(root, outputDir);
 const runId = crypto.randomUUID();
-const run = { contractVersion: 0, runId, stateDir: STATE, mode: project.mode, full: false, cacheOnly: true,
+const run = { contractVersion: 0, compositionVersion: 1, active: true, runId, stateDir: STATE, mode: project.mode, full: false, cacheOnly: true,
   sources: project.sources.map((path: string) => ({ path, expectedAnchors: reused[path].observation.anchors })),
   renderedSources: [], dependencyDigest: project.dependencyDigest, dependencies: project.dependencies,
-  outputDir, sourceKeys: keys, sourceDependencies: project.sourceDependencies, cacheEnabled: true, reused,
+  outputDir, sourceKeys: keys, producerSourceKeys, sourceDependencies: project.sourceDependencies, cacheEnabled: true, reused,
   cacheReasons: {}, git: await gitProvenance(root, project.gitEnabled) };
 await Deno.mkdir(await confined(root, `${STATE}/runs/${runId}/observations`), { recursive: true });
 await atomicJson(await confined(root, `${STATE}/run.json`), run);
